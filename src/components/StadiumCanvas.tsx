@@ -16,13 +16,16 @@ interface StadiumCanvasProps {
   setPower?: React.Dispatch<React.SetStateAction<number>>;
   curve: number; // -10 to +10
   setCurve?: React.Dispatch<React.SetStateAction<number>>;
-  shotCount: number; // 1 to 5 to regulate difficulty
+  shotCount: number;
   onAnimationTriggered: () => void;
   onShoot?: (dir: ShotDirection, h: ShotHeight, power: number, curve: number) => void;
   
   // Immersive properties
   score: number;
+  opponentScore?: number;
+  isOpponentTurn?: boolean;
   shotHistory: ShotResult[];
+  opponentHistory?: ShotResult[];
   onExitSelection: () => void;
   onResetMatch: () => void;
 }
@@ -44,7 +47,10 @@ export default function StadiumCanvas({
   onAnimationTriggered,
   onShoot,
   score,
+  opponentScore = 0,
+  isOpponentTurn = false,
   shotHistory,
+  opponentHistory = [],
   onExitSelection,
   onResetMatch
 }: StadiumCanvasProps) {
@@ -90,6 +96,16 @@ export default function StadiumCanvas({
     curve,
     shotCount,
     
+    // Opponent shootout parameters
+    opponentScore,
+    isOpponentTurn,
+    opponentHistory,
+    aiShotDir: 'center' as ShotDirection,
+    aiShotHeight: 'low' as ShotHeight,
+    aiPower: 80,
+    aiCurve: 0,
+    opponentShotSaved: false,
+
     // Sweep states
     sweepX: 0,
     sweepY: 1.4,
@@ -101,19 +117,21 @@ export default function StadiumCanvas({
     // Exact analog trajectory target
     aimTarget: { x: 0, y: 1.4 },
     
-    // Ball physical state (nearer distance: z = -7.5 instead of -11)
-    ball: { x: 0, y: 0.11, z: -7.5, vx: 0, vy: 0, vz: 0, rotX: 0, rotY: 0, scale: 1 },
+    // Ball physical state (nearer distance: z = -5.5 instead of -11)
+    ball: { x: 0, y: 0.11, z: -5.5, vx: 0, vy: 0, vz: 0, rotX: 0, rotY: 0, scale: 1 },
     // Ball spin rotation speeds
     ballSpin: { x: 0, y: 0 },
     
-    // Player physical state (nearer distance: z = -8.7 instead of -12.5)
-    kicker: { x: -0.9, y: 0, z: -8.7, rightLegAngle: 0, leftLegAngle: 0, frame: 0 },
+    // Player physical state (nearer distance: z = -6.7 instead of -12.5)
+    kicker: { x: -0.9, y: 0, z: -6.7, rightLegAngle: 0, leftLegAngle: 0, frame: 0 },
     
     // Goalkeeper physical state
     keeper: {
       x: 0,
       y: 0,
       z: 0,
+      startX: 0,
+      startY: 0,
       targetX: 0,
       targetY: 0,
       angle: 0,
@@ -150,7 +168,10 @@ export default function StadiumCanvas({
     stateRef.current.power = power;
     stateRef.current.curve = curve;
     stateRef.current.shotCount = shotCount;
-  }, [gameState, playerTeam, opponentTeam, direction, height, power, curve, shotCount]);
+    stateRef.current.isOpponentTurn = isOpponentTurn;
+    stateRef.current.opponentScore = opponentScore;
+    stateRef.current.opponentHistory = opponentHistory;
+  }, [gameState, playerTeam, opponentTeam, direction, height, power, curve, shotCount, isOpponentTurn, opponentScore, opponentHistory]);
 
   // Synchronize interactiveTarget coordinates back to stateRef
   useEffect(() => {
@@ -255,7 +276,7 @@ export default function StadiumCanvas({
     }
   };
 
-  // Keyboard space keybind
+  // Keybind Space key
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (gameState !== 'PRE_SHOT') return;
@@ -267,6 +288,36 @@ export default function StadiumCanvas({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [gameState, curve, onShoot]);
+
+  const handleKeeperDiveChoice = (dir: ShotDirection) => {
+    if (gameState !== 'PRE_SHOT') return;
+
+    audioEngine.playKick(0.3); // select sound SFX feedback
+
+    // Generate opponent's AI shot direction and height
+    const directions: ShotDirection[] = ['left', 'center', 'right'];
+    const heights: ShotHeight[] = ['low', 'high'];
+
+    const aiSelectedDir = directions[Math.floor(Math.random() * 3)];
+    const aiSelectedHeight = heights[Math.random() < 0.65 ? 0 : 1];
+    
+    // Opponent player stats-based power & curve
+    const oppPowerStat = opponentTeam.power;
+    const aiSelectedPower = Math.round(oppPowerStat - 8 + Math.random() * 16); // centered around team stat
+    const oppCurveStat = opponentTeam.curve;
+    const aiSelectedCurve = Math.round((Math.random() - 0.5) * (oppCurveStat / 5));
+
+    // Save AI variables inside stateRef
+    stateRef.current.aiShotDir = aiSelectedDir;
+    stateRef.current.aiShotHeight = aiSelectedHeight;
+    stateRef.current.aiPower = aiSelectedPower;
+    stateRef.current.aiCurve = aiSelectedCurve;
+
+    // Trigger onShoot so App.tsx transitions to RUN_UP state
+    if (onShoot) {
+      onShoot(dir, aiSelectedHeight, aiSelectedPower, aiSelectedCurve);
+    }
+  };
 
   // Adjust responsive viewport size on layout change
   useEffect(() => {
@@ -322,7 +373,7 @@ export default function StadiumCanvas({
     if (!ctx) return;
 
     let animFrameId: number;
-    let camera = { x: 0, y: 1.6, z: -10.5, tx: 0, ty: 1.2, tz: -7.5 }; // follow camera state target closer to penalty spot z = -7.5
+    let camera = { x: 0, y: 1.4, z: -8.1, tx: 0, ty: 1.2, tz: -5.5 }; // follow camera state target closer to penalty spot z = -5.5
 
     // Generate simulated stars / stadium lighting overhead
     const stadiumLights = [
@@ -375,10 +426,10 @@ export default function StadiumCanvas({
 
       // Handle Camera movement logic smoothly
       if (state.gameState === 'PRE_SHOT') {
-        // Static camera behind kicker closer to penalty spot z = -7.5
+        // Static camera behind kicker closer to penalty spot z = -5.5
         camera.x = camera.x * 0.95 + 0 * 0.05;
-        camera.y = camera.y * 0.95 + 1.25 * 0.05;
-        camera.z = camera.z * 0.95 + -10.5 * 0.05;
+        camera.y = camera.y * 0.95 + 1.2 * 0.05;
+        camera.z = camera.z * 0.95 + -8.1 * 0.05;
 
         // Sweep variables update
         if (aimingStepRef.current === 0) {
@@ -393,21 +444,39 @@ export default function StadiumCanvas({
           state.aimTarget = { x: state.lockedX, y: state.sweepY };
         } else if (aimingStepRef.current === 2) {
           // Phase 2: Sweep Power (10 to 100)
-          const sweepSpeed = 0.11 + (state.shotCount - 1) * 0.012;
+          const sweepSpeed = 0.16 + (state.shotCount - 1) * 0.012;
           state.sweepPower = Math.round(50 + Math.sin(state.frameIndex * sweepSpeed) * 48);
-          if (setPower) {
-            setPower(state.sweepPower);
+
+          // Highly performant direct DOM manipulation to bypass React virtual DOM lag
+          const fillEl = document.getElementById('power-bar-fill');
+          if (fillEl) {
+            fillEl.style.width = `${state.sweepPower}%`;
+            // Dynamic color updates matching sweet spot thresholds
+            if (state.sweepPower >= 70 && state.sweepPower <= 86) {
+              fillEl.style.backgroundColor = '#00FF87';
+              fillEl.style.boxShadow = '0 0 12px #00FF87';
+            } else if (state.sweepPower > 86) {
+              fillEl.style.backgroundColor = '#f43f5e';
+              fillEl.style.boxShadow = '0 0 12px #f43f5e';
+            } else {
+              fillEl.style.backgroundColor = '#fbbf24';
+              fillEl.style.boxShadow = 'none';
+            }
+          }
+          const textEl = document.getElementById('power-bar-text');
+          if (textEl) {
+            textEl.textContent = `SWEET SPOT: 70% - 86% (${state.sweepPower}%)`;
           }
         }
       } else if (state.gameState === 'RUN_UP' || state.gameState === 'KICK') {
         // Slight forward tilt on approach
-        camera.y = camera.y * 0.95 + 1.2 * 0.05;
-        camera.z = camera.z * 0.95 + -10.1 * 0.05;
+        camera.y = camera.y * 0.95 + 1.15 * 0.05;
+        camera.z = camera.z * 0.95 + -7.7 * 0.05;
       } else if (state.gameState === 'BALL_FLIGHT' || state.gameState === 'CELEBRATION' || state.gameState === 'SAVED' || state.gameState === 'OUT_OF_BOUNDS') {
         // Broadcast tracking panning of the shot
         const targetCamX = state.ball.x * 0.45;
         const targetCamY = Math.max(1.3, state.ball.y * 0.5 + 1.0);
-        const targetCamZ = -13.4 + state.ball.z * 0.25;
+        const targetCamZ = -11.4 + state.ball.z * 0.25;
 
         camera.x = camera.x * 0.88 + targetCamX * 0.12;
         camera.y = camera.y * 0.88 + targetCamY * 0.12;
@@ -861,18 +930,18 @@ export default function StadiumCanvas({
         // Physical animate running
         if (state.gameState === 'RUN_UP') {
           pK.frame++;
-          // run-up forward motion: ball is at z=-11, player runs from z=-12.5 to z=-11.45
+          // run-up forward motion: ball is at z=-5.5, player runs from z=-6.7 to z=-5.95
           pK.z += 0.057; 
           
           // Smooth diagonal approach from left to clear goalkeeper line of sight
-          const progress = (pK.z - (-12.5)) / (-11.45 - (-12.5));
+          const progress = (pK.z - (-6.7)) / (-5.95 - (-6.7));
           pK.x = -1.2 + Math.min(1.0, Math.max(0, progress)) * (1.2 - 0.15); // approaches ball diagonally
           
           pK.rightLegAngle = Math.sin(pK.frame * 0.4) * 0.55;
           pK.leftLegAngle = -Math.sin(pK.frame * 0.4) * 0.55;
 
           // Release shot precisely on final run-up frame
-          if (pK.z >= -11.45) {
+          if (pK.z >= -5.95) {
             // Kick trigger! swing right leg back and execute shot calculations
             state.gameState = 'KICK';
             pK.frame = 0;
@@ -887,96 +956,159 @@ export default function StadiumCanvas({
 
           if (pK.frame >= 6) {
             // Launch Ball! Play thrust kick audio SFX
-            audioEngine.playKick(state.power / 100);
-            state.gameState = 'BALL_FLIGHT';
+             audioEngine.playKick(state.isOpponentTurn ? 0.8 : (state.power / 100));
+             state.gameState = 'BALL_FLIGHT';
 
-            // Calculate precise initial physical vector from setup variables
-            // Standard speed scaling with power stat and stopped slider value
-            const finalPower = state.power;
-            const perfectMult = (finalPower >= 72 && finalPower <= 88) ? 1.05 : 0.88;
-            const velocityZ = 0.15 + (finalPower / 100) * 0.16 * perfectMult; 
+             let finalDestX = 0;
+             let finalDestY = 0;
+             let velocityZ = 0.22;
 
-            // Use exact targeted analog coordinate if dragging target is set, falling back to sectors (closer penalty spot bounds)
-            const exactX = state.aimTarget ? state.aimTarget.x : (state.direction === 'left' ? -3.2 : (state.direction === 'right' ? 3.2 : 0));
-            const exactY = state.aimTarget ? state.aimTarget.y : (state.height === 'high' ? 2.2 : 0.3);
+             if (!state.isOpponentTurn) {
+               // USER KICKS (Normal mode)
+               const finalPower = state.power;
+               const perfectMult = (finalPower >= 72 && finalPower <= 86) ? 1.01 : 0.85;
+               velocityZ = 0.15 + (finalPower / 100) * 0.16 * perfectMult; 
 
-            // Apply spin curving
-            // e.g. -10 is left spin, accelerates x to the left mid flight.
-            const spinCurve = state.curve * 0.12;
+               // Use exact targeted analog coordinate (the user aimed exactly here!)
+               const exactX = state.aimTarget ? state.aimTarget.x : (state.direction === 'left' ? -2.6 : (state.direction === 'right' ? 2.6 : 0));
+               const exactY = state.aimTarget ? state.aimTarget.y : (state.height === 'high' ? 2.0 : 0.5);
 
-            // Accuracy & randomness dispersion based on team stats
-            const playerAccuracy = state.playerTeam.accuracy;
-            const errLimit = Math.max(0.1, (100 - playerAccuracy) * 0.02); // tighter spread for manual aiming reward
-            const randomAngleX = (Math.random() - 0.5) * errLimit;
-            const randomAngleY = (Math.random() - 0.5) * errLimit;
+               const spinCurve = state.curve * 0.12;
 
-            // Over-power adds ballooning dispersion
-            const powerOverload = finalPower > 88 ? (finalPower - 85) * 0.05 : 0;
+               // Accuracy & randomness dispersion based on team stats (much tighter for sweet spot!)
+               const playerAccuracy = state.playerTeam.accuracy;
+               const errMult = (finalPower >= 70 && finalPower <= 86) ? 0.15 : 0.45; // Sweet spot = tight precision!
+               const errLimit = Math.max(0.02, (100 - playerAccuracy) * 0.015) * errMult; 
+               const randomAngleX = (Math.random() - 0.5) * errLimit;
+               const randomAngleY = (Math.random() - 0.5) * errLimit;
 
-            // Final destination at Z = 0 (using the new larger goal limits)
-            const finalDestX = exactX + randomAngleX * 2.5 + spinCurve * 1.2;
-            const finalDestY = exactY + randomAngleY * 2.0 + powerOverload;
+               // Over-power adds ballooning dispersion
+               const powerOverload = finalPower > 88 ? (finalPower - 86) * 0.04 : 0;
 
-            // Number of flight ticks is derived from closer distance / speed
-            const flightTicks = Math.round(7.5 / velocityZ);
+               // Final destination at Z = 0
+               finalDestX = exactX + randomAngleX * 2.5 + spinCurve * 0.45;
+               finalDestY = exactY + randomAngleY * 2.0 + powerOverload;
 
-            state.ball.vx = (finalDestX - state.ball.x) / flightTicks;
-            state.ball.vy = (finalDestY - state.ball.y) / flightTicks + 0.038; // add high pitch gravity compensation arc
-            state.ball.vz = velocityZ;
+               const flightTicks = Math.round(5.5 / velocityZ);
+               state.ball.vx = (finalDestX - state.ball.x) / flightTicks;
+               state.ball.vy = (finalDestY - state.ball.y) / flightTicks + 0.038; 
+               state.ball.vz = velocityZ;
 
-            // Spin velocities
-            state.ballSpin.x = 0.55;
-            state.ballSpin.y = state.curve * 0.086;
+               // Spin velocities
+               state.ballSpin.x = 0.55;
+               state.ballSpin.y = state.curve * 0.086;
 
-            // Trigger Goalkeeper AI Dive decision based on patterns
-            // Let's bias keeper to dive left/right of player history
-            const history = state.shotHistory;
-            let keeperDiveDir: ShotDirection = 'center';
-            let keeperHeight: ShotHeight = 'low';
+               // Computer Goalkeeper diving calculations
+               // Decide direction with biased patterns
+               let keeperDiveDir: ShotDirection = 'center';
+               let keeperHeight: ShotHeight = 'low';
+               const rand = Math.random();
+               if (rand < 0.38) keeperDiveDir = 'left';
+               else if (rand < 0.76) keeperDiveDir = 'right';
+               else keeperDiveDir = 'center';
 
-            // Decide direction with biased patterns
-            const rand = Math.random();
-            const leftCount = history.filter(d => d === 'left').length;
-            const rightCount = history.filter(d => d === 'right').length;
+               keeperHeight = Math.random() < 0.5 ? 'low' : 'high';
 
-            if (history.length >= 2 && (leftCount / history.length) > 0.6) {
-              // Bias keeper to slide left 60% of times
-              keeperDiveDir = rand < 0.6 ? 'left' : (rand < 0.85 ? 'right' : 'center');
-            } else if (history.length >= 2 && (rightCount / history.length) > 0.6) {
-              keeperDiveDir = rand < 0.6 ? 'right' : (rand < 0.85 ? 'left' : 'center');
-            } else {
-              // Standard equal chance keeper logic
-              if (rand < 0.36) keeperDiveDir = 'left';
-              else if (rand < 0.72) keeperDiveDir = 'right';
-              else keeperDiveDir = 'center';
-            }
+               // Record starting coordinates of goalie for smooth interpolation
+               state.keeper.startX = state.keeper.x;
+               state.keeper.startY = state.keeper.y;
 
-            // High or low keeper action match
-            keeperHeight = Math.random() < 0.5 ? 'low' : 'high';
+               // Goalkeeper diving decision mapping
+               const ballSector: 'left' | 'right' | 'center' = finalDestX < -1.4 ? 'left' : (finalDestX > 1.4 ? 'right' : 'center');
+               const guessedCorrectly = keeperDiveDir === ballSector;
 
-            // Log current direction to shot history
-            state.shotHistory.push(state.direction);
+               if (guessedCorrectly) {
+                 state.keeper.targetX = Math.min(3.7, Math.max(-3.7, finalDestX));
+                 state.keeper.targetY = Math.min(2.4, Math.max(0.35, finalDestY));
+               } else {
+                 if (ballSector === 'left') {
+                   state.keeper.targetX = 3.3;
+                 } else if (ballSector === 'right') {
+                   state.keeper.targetX = -3.3;
+                 } else {
+                   state.keeper.targetX = Math.random() < 0.5 ? -3.3 : 3.3;
+                 }
+                 state.keeper.targetY = keeperHeight === 'high' ? 1.8 : 0.45;
+               }
+               state.keeper.diveProgress = 0;
 
-            // Goalkeeper diving physical target coordinates (scaled wider and taller for the larger goal sizes!)
-            state.keeper.targetX = keeperDiveDir === 'left' ? -3.4 : (keeperDiveDir === 'right' ? 3.4 : 0);
-            state.keeper.targetY = keeperHeight === 'high' ? 1.8 : 0.45;
-            state.keeper.diveProgress = 0;
+             } else {
+               // OPPONENT KICKS (User is goalkeeper!)
+               const finalPower = stateRef.current.aiPower || 80;
+               velocityZ = 0.16 + (finalPower / 100) * 0.14;
 
-            // Grass kicking dust green particles
-            for (let k = 0; k < 12; k++) {
-              state.particles.push({
-                x: state.ball.x,
-                y: state.ball.y,
-                z: state.ball.z,
-                vx: (Math.random() - 0.5) * 1.5,
-                vy: Math.random() * 2.0,
-                vz: (Math.random() - 0.3) * 1.0,
-                color: '#86efac',
-                size: Math.random() * 3 + 2,
-                alpha: 0.9,
-                life: 1.0
-              });
-            }
+               // Retrieve the sector the computer AI shooter targeted
+               const aiDir = stateRef.current.aiShotDir || 'center';
+               const aiH = stateRef.current.aiShotHeight || 'low';
+
+               // Target coordinate
+               const exactX = aiDir === 'left' ? -2.6 : (aiDir === 'right' ? 2.6 : 0);
+               const exactY = aiH === 'high' ? 2.0 : 0.5;
+
+               const aiCurve = stateRef.current.aiCurve || 0;
+               const spinCurve = aiCurve * 0.1;
+
+               // Opponent accuracy randomness
+               const oppAccuracy = state.opponentTeam.accuracy;
+               const errLimit = Math.max(0.04, (100 - oppAccuracy) * 0.012);
+               const randomAngleX = (Math.random() - 0.5) * errLimit;
+               const randomAngleY = (Math.random() - 0.5) * errLimit;
+
+               finalDestX = exactX + randomAngleX * 2.2 + spinCurve * 0.5;
+               finalDestY = exactY + randomAngleY * 1.8;
+
+               const flightTicks = Math.round(5.5 / velocityZ);
+               state.ball.vx = (finalDestX - state.ball.x) / flightTicks;
+               state.ball.vy = (finalDestY - state.ball.y) / flightTicks + 0.038;
+               state.ball.vz = velocityZ;
+
+               state.ballSpin.x = 0.55;
+               state.ballSpin.y = aiCurve * 0.08;
+
+               // User's goalkeeper starting pose and interpolation target
+               state.keeper.startX = state.keeper.x;
+               state.keeper.startY = state.keeper.y;
+
+               // Check if user's selected goalkeeper dive matches the AI shooter sector!
+               const userDivedCorrectly = (state.direction === aiDir);
+
+               if (userDivedCorrectly) {
+                 // Elite fingertip save alignment!
+                 state.keeper.targetX = Math.min(3.7, Math.max(-3.7, finalDestX));
+                 state.keeper.targetY = Math.min(2.4, Math.max(0.35, finalDestY));
+                 stateRef.current.opponentShotSaved = true;
+               } else {
+                 // Dive the wrong way
+                 if (state.direction === 'left') {
+                   state.keeper.targetX = -3.2;
+                   state.keeper.targetY = 0.8;
+                 } else if (state.direction === 'right') {
+                   state.keeper.targetX = 3.2;
+                   state.keeper.targetY = 0.8;
+                 } else {
+                   state.keeper.targetX = 0;
+                   state.keeper.targetY = 0.2;
+                 }
+                 stateRef.current.opponentShotSaved = false;
+               }
+               state.keeper.diveProgress = 0;
+             }
+
+             // Grass kicking dust green particles
+             for (let k = 0; k < 12; k++) {
+               state.particles.push({
+                 x: state.ball.x,
+                 y: state.ball.y,
+                 z: state.ball.z,
+                 vx: (Math.random() - 0.5) * 1.5,
+                 vy: Math.random() * 2.0,
+                 vz: (Math.random() - 0.3) * 1.0,
+                 color: '#86efac',
+                 size: Math.random() * 3 + 2,
+                 alpha: 0.9,
+                 life: 1.0
+               });
+             }
           }
         }
 
@@ -985,6 +1117,7 @@ export default function StadiumCanvas({
         if (pKP.ok) {
           ctx.save();
           const sz = pKP.scale * 1.7; // size multiplier
+          const currentKickerTeam = state.isOpponentTurn ? state.opponentTeam : state.playerTeam;
 
           // Player Shadow
           ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
@@ -992,82 +1125,248 @@ export default function StadiumCanvas({
           ctx.ellipse(pKP.x, pKP.y, pKP.scale * 0.35, pKP.scale * 0.08, 0, 0, Math.PI * 2);
           ctx.fill();
 
-          // Leg Left (drawn relative to player position)
-          const colorSet = state.playerTeam.colors;
-          ctx.strokeStyle = colorSet.shorts;
-          ctx.lineWidth = sz * 0.12;
+          const colorSet = currentKickerTeam.colors;
           ctx.lineCap = 'round';
-          
-          // Draw left leg hinging on pelvis
-          const leftHipX = pKP.x - sz * 0.08;
-          const leftHipY = pKP.y - sz * 0.44;
-          const leftFootX = leftHipX + Math.sin(pK.leftLegAngle) * sz * 0.18;
-          const leftFootY = pKP.y - sz * 0.2;
+
+          // Body breath & tilt oscillation animation
+          const bodyBreathe = Math.sin(state.frameIndex * 0.1) * sz * 0.015;
+          const runTilt = state.gameState === 'RUN_UP' ? 0.08 : 0;
+          ctx.translate(pKP.x, pKP.y + bodyBreathe);
+          ctx.rotate(runTilt);
+
+          // 1. Draw Leg Left (Hip to Foot)
+          const leftHipX = -sz * 0.08;
+          const leftHipY = -sz * 0.44;
+          const leftFootX = leftHipX + Math.sin(pK.leftLegAngle) * sz * 0.22;
+          const leftFootY = -sz * 0.15;
+
+          // Shorts part of leg
+          ctx.strokeStyle = colorSet.shorts;
+          ctx.lineWidth = sz * 0.13;
           ctx.beginPath();
           ctx.moveTo(leftHipX, leftHipY);
+          ctx.lineTo(leftHipX + (leftFootX - leftHipX) * 0.4, leftHipY + (leftFootY - leftHipY) * 0.4);
+          ctx.stroke();
+
+          // High Socks part of left leg
+          ctx.strokeStyle = colorSet.socks || '#ffffff';
+          ctx.lineWidth = sz * 0.095;
+          ctx.beginPath();
+          ctx.moveTo(leftHipX + (leftFootX - leftHipX) * 0.4, leftHipY + (leftFootY - leftHipY) * 0.4);
           ctx.lineTo(leftFootX, leftFootY);
           ctx.stroke();
 
-          // Leg Right
-          const rightHipX = pKP.x + sz * 0.08;
-          const rightHipY = pKP.y - sz * 0.44;
-          const rightFootX = rightHipX + Math.sin(pK.rightLegAngle) * sz * 0.22;
-          const rightFootY = pKP.y - sz * 0.2;
+          // Neon Cleats (Footwear left)
+          ctx.fillStyle = '#ff007f'; // Bright neon hot rose boots!
+          ctx.beginPath();
+          ctx.ellipse(leftFootX, leftFootY + sz * 0.02, sz * 0.05, sz * 0.026, Math.PI / 12, 0, Math.PI * 2);
+          ctx.fill();
+
+          // 2. Draw Leg Right (Hip to Foot)
+          const rightHipX = sz * 0.08;
+          const rightHipY = -sz * 0.44;
+          const rightFootX = rightHipX + Math.sin(pK.rightLegAngle) * sz * 0.25;
+          const rightFootY = -sz * 0.15;
+
+          // Shorts part of leg
           ctx.strokeStyle = colorSet.shorts;
+          ctx.lineWidth = sz * 0.13;
           ctx.beginPath();
           ctx.moveTo(rightHipX, rightHipY);
+          ctx.lineTo(rightHipX + (rightFootX - rightHipX) * 0.4, rightHipY + (rightFootY - rightHipY) * 0.4);
+          ctx.stroke();
+
+          // High Socks part of right leg
+          ctx.strokeStyle = colorSet.socks || '#ffffff';
+          ctx.lineWidth = sz * 0.095;
+          ctx.beginPath();
+          ctx.moveTo(rightHipX + (rightFootX - rightHipX) * 0.4, rightHipY + (rightFootY - rightHipY) * 0.4);
           ctx.lineTo(rightFootX, rightFootY);
           ctx.stroke();
 
-          // Torso / Jersey (stripy or plain)
-          ctx.fillStyle = colorSet.shirt;
-          ctx.fillRect(pKP.x - sz * 0.15, pKP.y - sz * 0.8, sz * 0.3, sz * 0.38);
+          // Neon Cleats (Footwear right)
+          ctx.fillStyle = '#ff007f';
+          ctx.beginPath();
+          ctx.ellipse(rightFootX, rightFootY + sz * 0.02, sz * 0.05, sz * 0.026, -Math.PI / 12, 0, Math.PI * 2);
+          ctx.fill();
 
+          // 3. Torso / Jersey (with neck trim & tiny squad number!)
+          ctx.fillStyle = colorSet.shirt;
+          ctx.fillRect(-sz * 0.15, -sz * 0.8, sz * 0.3, sz * 0.38);
+
+          // Jersey patterns (stripes/checkers)
           if (colorSet.pattern === 'stripes' && colorSet.stripes) {
             ctx.fillStyle = colorSet.stripes;
-            ctx.fillRect(pKP.x - sz * 0.1, pKP.y - sz * 0.8, sz * 0.04, sz * 0.38);
-            ctx.fillRect(pKP.x + sz * 0.06, pKP.y - sz * 0.8, sz * 0.04, sz * 0.38);
+            ctx.fillRect(-sz * 0.1, -sz * 0.8, sz * 0.04, sz * 0.38);
+            ctx.fillRect(sz * 0.06, -sz * 0.8, sz * 0.04, sz * 0.38);
           } else if (colorSet.pattern === 'squares' && colorSet.stripes) {
-            // Croatia checkers checker-squares
             ctx.fillStyle = colorSet.stripes;
-            ctx.fillRect(pKP.x - sz * 0.15, pKP.y - sz * 0.8, sz * 0.1, sz * 0.1);
-            ctx.fillRect(pKP.x + sz * 0.05, pKP.y - sz * 0.8, sz * 0.1, sz * 0.1);
-            ctx.fillRect(pKP.x - sz * 0.05, pKP.y - sz * 0.7, sz * 0.1, sz * 0.1);
-            ctx.fillRect(pKP.x - sz * 0.15, pKP.y - sz * 0.6, sz * 0.1, sz * 0.1);
-            ctx.fillRect(pKP.x + sz * 0.05, pKP.y - sz * 0.6, sz * 0.1, sz * 0.1);
+            ctx.fillRect(-sz * 0.15, -sz * 0.8, sz * 0.09, sz * 0.09);
+            ctx.fillRect(sz * 0.05, -sz * 0.8, sz * 0.09, sz * 0.09);
+            ctx.fillRect(-sz * 0.05, -sz * 0.71, sz * 0.09, sz * 0.09);
+            ctx.fillRect(-sz * 0.15, -sz * 0.62, sz * 0.09, sz * 0.09);
+            ctx.fillRect(sz * 0.05, -sz * 0.62, sz * 0.09, sz * 0.09);
           }
 
-          // Arms extending out
-          ctx.strokeStyle = '#fbcfe8';
-          ctx.lineWidth = sz * 0.07;
+          // Small neck collar
+          ctx.fillStyle = '#ffedd5'; // Skin tone
           ctx.beginPath();
-          // left arm
-          ctx.moveTo(pKP.x - sz * 0.16, pKP.y - sz * 0.75);
-          ctx.lineTo(pKP.x - sz * 0.32, pKP.y - sz * 0.62);
-          // right arm
-          ctx.moveTo(pKP.x + sz * 0.16, pKP.y - sz * 0.75);
-          ctx.lineTo(pKP.x + sz * 0.32, pKP.y - sz * 0.62);
+          ctx.moveTo(-sz * 0.05, -sz * 0.8);
+          ctx.lineTo(sz * 0.05, -sz * 0.8);
+          ctx.lineTo(0, -sz * 0.76);
+          ctx.closePath();
+          ctx.fill();
+
+          // Tiny display number 10 or 7 on chest!
+          ctx.fillStyle = '#ffffff';
+          ctx.font = `bold ${Math.round(sz * 0.15)}px monospace`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(currentKickerTeam.id === 'POR' ? '7' : '10', 0, -sz * 0.61);
+
+          // 4. Arms with dynamic physical swings
+          ctx.strokeStyle = '#ffedd5'; // skin
+          ctx.lineWidth = sz * 0.07;
+          ctx.lineCap = 'round';
+          
+          let lArmX = -sz * 0.3;
+          let lArmY = -sz * 0.61;
+          let rArmX = sz * 0.3;
+          let rArmY = -sz * 0.61;
+
+          if (state.gameState === 'RUN_UP') {
+            const armSwing = Math.sin(pK.frame * 0.45) * sz * 0.15;
+            lArmX += armSwing; lArmY += Math.cos(pK.frame * 0.45) * sz * 0.08;
+            rArmX -= armSwing; rArmY -= Math.cos(pK.frame * 0.45) * sz * 0.08;
+          } else if (state.gameState === 'KICK') {
+            lArmX = -sz * 0.42; lArmY = -sz * 0.8; // raise arms for kicking balance!
+            rArmX = sz * 0.42; rArmY = -sz * 0.8;
+          }
+
+          ctx.beginPath();
+          ctx.moveTo(-sz * 0.15, -sz * 0.78);
+          ctx.lineTo(lArmX, lArmY);
           ctx.stroke();
 
-          // Head with customized hair
-          ctx.fillStyle = '#fbcfe8'; // Skin
           ctx.beginPath();
-          ctx.arc(pKP.x, pKP.y - sz * 0.9, sz * 0.09, 0, Math.PI * 2);
+          ctx.moveTo(sz * 0.15, -sz * 0.78);
+          ctx.lineTo(rArmX, rArmY);
+          ctx.stroke();
+
+          // Sleeves
+          ctx.strokeStyle = colorSet.shirt;
+          ctx.lineWidth = sz * 0.09;
+          ctx.beginPath();
+          ctx.moveTo(-sz * 0.15, -sz * 0.77);
+          ctx.lineTo(-sz * 0.22, -sz * 0.72);
+          ctx.moveTo(sz * 0.15, -sz * 0.77);
+          ctx.lineTo(sz * 0.22, -sz * 0.72);
+          ctx.stroke();
+
+          // 5. Head with determined/blinking facial expressions!
+          ctx.fillStyle = '#ffedd5'; // skin
+          ctx.beginPath();
+          ctx.arc(0, -sz * 0.9, sz * 0.1, 0, Math.PI * 2);
           ctx.fill();
 
-          // Hair based on players (Messi: auburn #a855f7, Mbappe: short dark, Ronaldo: black #18181b, Modric: blond #fef08a)
-          let hairColor = '#18181b';
-          if (state.playerTeam.id === 'ARG') hairColor = '#854d0e'; // auburn/brown
-          else if (state.playerTeam.id === 'CRO') hairColor = '#eab308'; // blonde
-          else if (state.playerTeam.id === 'ESP') hairColor = '#451a03';
-          else if (state.playerTeam.id === 'GER') hairColor = '#ca8a04';
-          else if (state.playerTeam.id === 'NED') hairColor = '#78350f';
-          
-          ctx.fillStyle = hairColor;
+          // Blinking determined eyes & intense eyebrows
+          const isBlinking = state.frameIndex % 85 < 4;
+          ctx.fillStyle = '#0f172a';
+          if (!isBlinking) {
+            ctx.beginPath();
+            ctx.arc(-sz * 0.032, -sz * 0.90, sz * 0.014, 0, Math.PI * 2);
+            ctx.arc(sz * 0.032, -sz * 0.90, sz * 0.014, 0, Math.PI * 2);
+            ctx.fill();
+          } else {
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = sz * 0.008;
+            ctx.beginPath();
+            ctx.moveTo(-sz * 0.05, -sz * 0.90); ctx.lineTo(-sz * 0.015, -sz * 0.90);
+            ctx.moveTo(sz * 0.015, -sz * 0.90); ctx.lineTo(sz * 0.05, -sz * 0.90);
+            ctx.stroke();
+          }
+
+          // Determined little eyebrows draw
+          ctx.strokeStyle = '#78350f';
+          ctx.lineWidth = sz * 0.008;
           ctx.beginPath();
-          // Draw hair helmet shape
-          ctx.arc(pKP.x, pKP.y - sz * 0.94, sz * 0.09, Math.PI, 0);
-          ctx.fill();
+          ctx.moveTo(-sz * 0.056, -sz * 0.935); ctx.lineTo(-sz * 0.015, -sz * 0.925);
+          ctx.moveTo(sz * 0.015, -sz * 0.925); ctx.lineTo(sz * 0.056, -sz * 0.935);
+          ctx.stroke();
+
+          // 6. Hair Styles with volume
+          let hairColor = '#18181b';
+          if (currentKickerTeam.id === 'ARG') {
+            hairColor = '#7c2d12'; // Messi chestnut cooper
+            ctx.fillStyle = hairColor;
+            
+            // Messi cropped volume hair
+            ctx.beginPath();
+            ctx.arc(0, -sz * 0.95, sz * 0.105, Math.PI, 0);
+            ctx.fill();
+            
+            // Messi neat brown beard!
+            ctx.strokeStyle = '#7c2d12';
+            ctx.lineWidth = sz * 0.035;
+            ctx.beginPath();
+            ctx.arc(0, -sz * 0.89, sz * 0.09, Math.PI*0.1, Math.PI*0.9);
+            ctx.stroke();
+          } 
+          else if (currentKickerTeam.id === 'BRA') {
+            hairColor = '#fef08a'; // Neymar platinum mohawk
+            ctx.fillStyle = hairColor;
+            // Spiky mohawk
+            ctx.beginPath();
+            ctx.moveTo(-sz * 0.035, -sz * 0.99);
+            ctx.lineTo(0, -sz * 1.09);
+            ctx.lineTo(sz * 0.035, -sz * 0.99);
+            ctx.closePath();
+            ctx.fill();
+            
+            // white headband
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = sz * 0.022;
+            ctx.beginPath();
+            ctx.moveTo(-sz * 0.075, -sz * 0.94);
+            ctx.lineTo(sz * 0.075, -sz * 0.94);
+            ctx.stroke();
+          } 
+          else if (currentKickerTeam.id === 'POR') {
+            hairColor = '#090503'; // Ronaldo gelled black
+            ctx.fillStyle = hairColor;
+            ctx.beginPath();
+            ctx.arc(0, -sz * 0.96, sz * 0.1, Math.PI, 0);
+            ctx.fill();
+            // gelled high wave crest
+            ctx.beginPath();
+            ctx.ellipse(sz * 0.02, -sz * 1.01, sz * 0.06, sz * 0.025, Math.PI / 8, 0, Math.PI * 2);
+            ctx.fill();
+          } 
+          else if (currentKickerTeam.id === 'CRO') {
+            hairColor = '#eab308'; // Modric long blonde hair + band
+            ctx.fillStyle = hairColor;
+            // side hair locks down to ears
+            ctx.beginPath();
+            ctx.arc(-sz * 0.07, -sz * 0.9, sz * 0.05, 0, Math.PI * 2);
+            ctx.arc(sz * 0.07, -sz * 0.9, sz * 0.05, 0, Math.PI * 2);
+            ctx.arc(0, -sz * 0.95, sz * 0.105, Math.PI, 0);
+            ctx.fill();
+            // thin headband
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = sz * 0.01;
+            ctx.beginPath();
+            ctx.moveTo(-sz * 0.08, -sz * 0.92);
+            ctx.lineTo(sz * 0.08, -sz * 0.92);
+            ctx.stroke();
+          } 
+          else {
+            // Standard cropped styled hair
+            hairColor = '#24140b';
+            ctx.fillStyle = hairColor;
+            ctx.beginPath();
+            ctx.arc(0, -sz * 0.94, sz * 0.1, Math.PI, 0);
+            ctx.fill();
+          }
           
           ctx.restore();
         }
@@ -1077,14 +1376,24 @@ export default function StadiumCanvas({
       const gK = state.keeper;
       
       if (state.gameState === 'BALL_FLIGHT' || state.gameState === 'SAVED' || state.gameState === 'CELEBRATION') {
-        // Diving animation in progress
-        gK.diveProgress = Math.min(1.0, gK.diveProgress + 0.06);
-        gK.x = gK.x * 0.8 + gK.targetX * gK.diveProgress * 0.2;
-        gK.y = gK.y * 0.8 + gK.targetY * gK.diveProgress * 0.2;
+        // Calculate physics flight progress from ball's real Z coordinate (-5.5 start)
+        const progressZ = (state.ball.z - (-5.5)) / (0 - (-5.5));
+        const t = Math.min(1.0, Math.max(0.0, progressZ));
+        
+        gK.diveProgress = t;
+        
+        // Beautiful fast cubic ease-out curve for reactive dive
+        const easeT = 1 - Math.pow(1 - t, 3);
+        
+        const sX = gK.startX !== undefined ? gK.startX : 0;
+        const sY = gK.startY !== undefined ? gK.startY : 0;
+        
+        gK.x = sX + (gK.targetX - sX) * easeT;
+        gK.y = sY + (gK.targetY - sY) * easeT;
         
         // Tilt rotation of diving body
         if (gK.targetX !== 0) {
-          gK.angle = (gK.targetX > 0 ? 1 : -1) * 0.92 * gK.diveProgress;
+          gK.angle = (gK.targetX > 0 ? 1 : -1) * 0.92 * easeT;
           gK.scaleY = 0.55;
         } else {
           // Centered reaction
@@ -1449,7 +1758,7 @@ export default function StadiumCanvas({
           
           const startX = 0;
           const startY = 0.11;
-          const startZ = -7.5;
+          const startZ = -5.5;
           const endX = state.aimTarget.x;
           const endY = state.aimTarget.y;
           const endZ = 0;
@@ -1470,41 +1779,80 @@ export default function StadiumCanvas({
           }
           ctx.stroke();
 
-          // Draw the Crosshair reticle target
+          // Draw the target reticle as a real spinning soccer ball! (as requested)
           ctx.restore();
           ctx.save();
           ctx.translate(tProj.x, tProj.y);
 
-          const rSize = Math.max(10, tProj.scale * 0.22); // dynamic scale targeting reticle
+          const rSize = Math.max(12, tProj.scale * 0.22); // dynamic scale targeting reticle
           const pulse = 1.0 + Math.sin(state.frameIndex * 0.12) * 0.08;
+          const currentRadius = rSize * pulse;
           
           // Glowing outer targeted ring (Cyan if adjusting direction, Gold yellow if adjusting height, Gold/Rose if locked/power)
           let reticleColor = 'rgba(244, 63, 94, 0.85)'; // default rose
           if (aimingStepRef.current === 0) reticleColor = 'rgba(14, 165, 233, 0.85)'; // cyan
           else if (aimingStepRef.current === 1) reticleColor = 'rgba(234, 179, 8, 0.85)'; // gold
           
+          // 1. Draw glowing outer ring
+          ctx.shadowColor = reticleColor;
+          ctx.shadowBlur = 10;
           ctx.strokeStyle = reticleColor; 
-          ctx.lineWidth = 2;
+          ctx.lineWidth = 3;
           ctx.beginPath();
-          ctx.arc(0, 0, rSize * pulse, 0, Math.PI * 2);
+          ctx.arc(0, 0, currentRadius + 2, 0, Math.PI * 2);
           ctx.stroke();
+          
+          ctx.shadowBlur = 0; // reset shadow for ball drawing
 
-          // Inner center bullet point
-          ctx.fillStyle = reticleColor;
+          // 2. Draw soccer ball sphere base
           ctx.beginPath();
-          ctx.arc(0, 0, 4, 0, Math.PI * 2);
+          ctx.arc(0, 0, currentRadius, 0, Math.PI * 2);
+          const ballGrad = ctx.createRadialGradient(-currentRadius * 0.3, -currentRadius * 0.3, currentRadius * 0.1, 0, 0, currentRadius);
+          ballGrad.addColorStop(0, '#ffffff');
+          ballGrad.addColorStop(0.85, '#f8fafc');
+          ballGrad.addColorStop(1, '#cbd5e1');
+          ctx.fillStyle = ballGrad;
           ctx.fill();
 
-          // Standard reticle hair ticks
+          // 3. Draw soccer ball panel lines and star/pentagon patterns
+          ctx.strokeStyle = '#020617';
+          ctx.lineWidth = 1.6;
+          ctx.save();
+          ctx.rotate(state.frameIndex * 0.035); // subtle continuous spin for immersion
+
+          // Draw dark panels mimicking soccer ball pentagons
+          for (let star = 0; star < 5; star++) {
+            const sAngle = (star * Math.PI * 2) / 5;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(Math.sin(sAngle) * currentRadius, Math.cos(sAngle) * currentRadius);
+            ctx.stroke();
+
+            // Draw outer panel dots
+            ctx.fillStyle = '#0f172a';
+            ctx.beginPath();
+            ctx.arc(Math.sin(sAngle) * currentRadius * 0.7, Math.cos(sAngle) * currentRadius * 0.7, currentRadius * 0.25, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          // Central classic panel
+          ctx.fillStyle = '#1e293b';
+          ctx.beginPath();
+          ctx.arc(0, 0, currentRadius * 0.28, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.restore();
+
+          // 4. Draw crisp white alignment cross hair ticks just outside the ball
           ctx.strokeStyle = '#ffffff';
           ctx.lineWidth = 1.5;
           ctx.beginPath();
           // horizontal hairs
-          ctx.moveTo(-rSize * 1.3, 0); ctx.lineTo(-rSize * 0.5, 0);
-          ctx.moveTo(rSize * 0.5, 0); ctx.lineTo(rSize * 1.3, 0);
+          ctx.moveTo(-currentRadius * 1.5, 0); ctx.lineTo(-currentRadius * 1.1, 0);
+          ctx.moveTo(currentRadius * 1.1, 0); ctx.lineTo(currentRadius * 1.5, 0);
           // vertical hairs
-          ctx.moveTo(0, -rSize * 1.3); ctx.lineTo(0, -rSize * 0.5);
-          ctx.moveTo(0, rSize * 0.5); ctx.lineTo(0, rSize * 1.3);
+          ctx.moveTo(0, -currentRadius * 1.5); ctx.lineTo(0, -currentRadius * 1.1);
+          ctx.moveTo(0, currentRadius * 1.1); ctx.lineTo(0, currentRadius * 1.5);
           ctx.stroke();
 
           ctx.restore();
@@ -1578,6 +1926,111 @@ export default function StadiumCanvas({
         ctx.restore();
       }
 
+      // Draw Trophy Spotlight celebration in MATCH_OVER
+      if (stateRef.current.gameState === 'MATCH_OVER') {
+        ctx.save();
+        // Darken background for maximum spotlight ambient contrast
+        ctx.fillStyle = 'rgba(2, 6, 23, 0.82)';
+        ctx.fillRect(0, 0, dimensions.width, dimensions.height);
+
+        // Rotating sunburst celebration beams
+        ctx.translate(dimensions.width / 2, dimensions.height * 0.48);
+        ctx.save();
+        ctx.rotate(state.frameIndex * 0.007);
+        for (let ray = 0; ray < 12; ray++) {
+          ctx.fillStyle = 'rgba(234, 179, 8, 0.08)';
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.arc(0, 0, dimensions.width * 0.48, (ray * Math.PI * 2) / 12, (ray * Math.PI * 2 + 0.28) / 12);
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.restore();
+
+        // Majestic spotlight cone
+        const baseGradient = ctx.createLinearGradient(0, -dimensions.height * 0.48, 0, dimensions.height * 0.36);
+        baseGradient.addColorStop(0, 'rgba(255, 255, 255, 0.02)');
+        baseGradient.addColorStop(0.7, 'rgba(253, 224, 71, 0.16)');
+        baseGradient.addColorStop(1, 'rgba(253, 224, 71, 0.32)');
+        ctx.fillStyle = baseGradient;
+        ctx.beginPath();
+        ctx.moveTo(0, -dimensions.height * 0.48);
+        ctx.lineTo(-dimensions.width * 0.18, dimensions.height * 0.22);
+        ctx.lineTo(dimensions.width * 0.18, dimensions.height * 0.22);
+        ctx.closePath();
+        ctx.fill();
+
+        // 3D-styled Solid World Cup Gold Trophy cup!
+        ctx.save();
+        const basePulse = Math.sin(state.frameIndex * 0.06) * 11;
+        ctx.translate(0, -18 + basePulse);
+
+        // Sparkle stars around trophy
+        for (let sp = 0; sp < 8; sp++) {
+          const spAngle = (sp * Math.PI * 2) / 8 + state.frameIndex * 0.05;
+          const sx = Math.sin(spAngle) * 60;
+          const sy = Math.cos(spAngle) * 50 - 30;
+          const sSize = Math.max(0, 3 + Math.sin(state.frameIndex * 0.14 + sp) * 4);
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(sx, sy, sSize * 0.6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // 1. Draw Trophy Base (Emerald Malachite rings on gold)
+        ctx.fillStyle = '#854d0e'; // Golden Bronze base
+        ctx.fillRect(-38, 48, 76, 12);
+        // Green Malachite stripes
+        ctx.fillStyle = '#064e3b';
+        ctx.fillRect(-34, 51, 68, 3);
+        ctx.fillRect(-34, 56, 68, 3);
+
+        ctx.fillStyle = '#ca8a04'; // Gold Base
+        ctx.fillRect(-28, 28, 56, 20);
+
+        // 2. Draw Trophy body holding globe (Winding figures holding the world cup)
+        ctx.beginPath();
+        ctx.moveTo(-16, 28);
+        ctx.bezierCurveTo(-24, 0, -28, -25, -22, -35); // Left supportive arm
+        ctx.lineTo(22, -35);
+        ctx.bezierCurveTo(28, -25, 24, 0, 16, 28);
+        ctx.closePath();
+        const goldGrad = ctx.createRadialGradient(-5, -12, 10, 0, 0, 38);
+        goldGrad.addColorStop(0, '#fef08a'); // shiny bright highlights
+        goldGrad.addColorStop(0.5, '#eab308'); // gold
+        goldGrad.addColorStop(1, '#854d0e'); // bronze
+        ctx.fillStyle = goldGrad;
+        ctx.fill();
+
+        // 3. Central Supportive details
+        ctx.fillStyle = '#ca8a04';
+        ctx.beginPath();
+        ctx.ellipse(0, 4, 11, 24, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 4. Draw the Golden Globe sphere at the top top!
+        ctx.beginPath();
+        ctx.arc(0, -38, 28, 0, Math.PI * 2);
+        const globeGrad = ctx.createRadialGradient(-8, -46, 5, 0, -38, 28);
+        globeGrad.addColorStop(0, '#ffffff');
+        globeGrad.addColorStop(0.35, '#fef08a');
+        globeGrad.addColorStop(0.85, '#ca8a04');
+        globeGrad.addColorStop(1, '#713f12');
+        ctx.fillStyle = globeGrad;
+        ctx.fill();
+
+        // 5. Embossed continents details on globe
+        ctx.strokeStyle = '#ca8a04';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        // Latitude bands
+        ctx.arc(0, -38, 28, -Math.PI/6, Math.PI + Math.PI/6);
+        ctx.stroke();
+
+        ctx.restore();
+        ctx.restore();
+      }
+
       // Decelerate continuous screen shake
       if (state.screenShake > 0) {
         state.screenShake *= 0.90;
@@ -1607,9 +2060,9 @@ export default function StadiumCanvas({
       onAnimationTriggered();
     } else if (gameState === 'PRE_SHOT') {
       // RESET Player positioning back to original spot (nearer distance)
-      state.ball = { x: 0, y: 0.11, z: -7.5, vx: 0, vy: 0, vz: 0, rotX: 0, rotY: 0, scale: 1 };
+      state.ball = { x: 0, y: 0.11, z: -5.5, vx: 0, vy: 0, vz: 0, rotX: 0, rotY: 0, scale: 1 };
       state.ballSpin = { x: 0, y: 0 };
-      state.kicker = { x: -0.9, y: 0, z: -8.7, rightLegAngle: 0, leftLegAngle: 0, frame: 0 };
+      state.kicker = { x: -0.9, y: 0, z: -6.7, rightLegAngle: 0, leftLegAngle: 0, frame: 0 };
       state.keeper.x = 0;
       state.keeper.y = 0;
       state.keeper.z = 0;
@@ -1685,259 +2138,251 @@ export default function StadiumCanvas({
         className="absolute inset-0 w-full h-full object-cover z-0 cursor-pointer"
       />
 
-      {/* 2. WORLD CUP 2026 SCOREBOARD HEADER BAR */}
-      <div className="absolute top-0 inset-x-0 z-20 bg-slate-950/80 backdrop-blur-md border-b border-slate-900 px-6 py-4 flex items-center justify-between pointer-events-auto">
-        <div className="flex items-center gap-3">
+      {/* 2. WORLD CUP 2026 SCOREBOARD HEADER BAR (IMMERSIVE HUD) */}
+      <div className="absolute top-4 inset-x-4 md:inset-x-8 z-20 bg-black/50 backdrop-blur-md border border-white/10 px-4 md:px-6 py-2.5 rounded-2xl flex items-center justify-between pointer-events-auto shadow-[0_8px_32px_rgba(0,0,0,0.6)] transition-all">
+        {/* Left Team Details */}
+        <div className="flex items-center gap-2">
           <button 
             onClick={onExitSelection} 
-            className="w-8 h-8 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-300 hover:text-white transition active:scale-95 cursor-pointer"
-            title="Exit to Selection"
+            className="w-8 h-8 rounded-xl bg-white/10 border border-white/15 flex items-center justify-center text-slate-100 hover:bg-white/20 hover:text-white transition active:scale-95 cursor-pointer"
+            title="Volver"
           >
             <ArrowLeft className="w-4 h-4" />
           </button>
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
-              <Gamepad2 className="w-4 h-4" />
+          
+          <div className="flex flex-col">
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-3.5 rounded-sm shadow-sm border border-white/20" style={{ backgroundColor: playerTeam.colors.shirt }} />
+              <span className="text-xs font-black text-white uppercase tracking-wider block">
+                {playerTeam.id}
+              </span>
             </div>
-            <span className="text-xs font-bold text-white uppercase tracking-widest hidden sm:inline truncate max-w-[150px]">
-              {playerTeam.player}
+            <span className="text-[9px] text-[#00FF87] font-bold block leading-none mt-0.5 select-none font-mono">
+              PATEAS: {score} G
             </span>
           </div>
         </div>
 
-        {/* Center Live Goal Score banner */}
-        <div className="flex flex-col items-center">
-          <div className="flex items-center gap-4 bg-slate-900/90 border border-slate-800/80 px-4.5 py-2 rounded-xl shadow-lg">
-            <div className="text-right">
-              <span className="text-[10px] font-mono font-semibold text-slate-500 uppercase tracking-wider block">STRIKER</span>
-              <span className="text-xs font-black text-white">{playerTeam.id}</span>
-            </div>
+        {/* Center Complex Live Match Score Banner */}
+        <div className="flex flex-col items-center gap-2">
+          <div className="flex items-center gap-3 px-3.5 py-1.5 rounded-xl bg-black/40 border border-white/5 shadow-inner">
+            <span className="text-xs font-black text-[#00FF87] tracking-wider">{playerTeam.id}</span>
             
-            <div className="flex items-center gap-1.5 font-mono">
-              <span className="text-lg font-black bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 px-3 py-0.5 rounded-lg shadow-inner">
+            <div className="flex items-center gap-2 font-mono">
+              <span className="text-sm font-black text-[#00FF87] bg-[#00FF87]/20 border border-[#00FF87]/30 px-2 rounded-md shadow-sm">
                 {score}
               </span>
-              <span className="text-xs text-slate-600 font-bold">:</span>
-              <span className="text-lg font-black bg-slate-950/60 border border-slate-800/40 text-slate-400 px-3 py-0.5 rounded-lg">
-                {(shotCount - 1) - score}
+              <span className="text-xs text-white/50 font-bold">-</span>
+              <span className="text-sm font-black text-red-400 bg-red-500/20 border border-red-500/30 px-2 rounded-md shadow-sm">
+                {opponentScore}
               </span>
             </div>
-            
-            <div className="text-left">
-              <span className="text-[10px] font-mono font-semibold text-slate-500 uppercase tracking-wider block">KEEPER</span>
-              <span className="text-xs font-black text-slate-300">{opponentTeam.id}</span>
-            </div>
+
+            <span className="text-xs font-black text-red-400 tracking-wider">{opponentTeam.id}</span>
           </div>
 
-          {/* 5 Round penalty visual light circles */}
-          <div className="flex items-center gap-1.5 mt-2">
-            {Array.from({ length: 5 }).map((_, idx) => {
-              const shot = shotHistory[idx];
-              let circleClass = "bg-slate-800 border-slate-700 text-slate-500";
-              if (shot) {
-                if (shot.isGoal) {
-                  circleClass = "bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.3)]";
-                } else {
-                  circleClass = "bg-red-500/20 border-red-500 text-red-400 shadow-[0_0_8px_rgba(239,68,68,0.3)]";
+          {/* Double Parallel round history matrices */}
+          <div className="flex flex-col gap-1 items-center bg-black/20 p-1 px-2.5 rounded-lg border border-white/5">
+            {/* User row */}
+            <div className="flex items-center gap-1">
+              <span className="text-[8px] font-mono font-bold text-[#00FF87] w-8 text-right mr-1 uppercase">PATEAS</span>
+              {Array.from({ length: Math.max(5, shotHistory.length) }).map((_, idx) => {
+                const shot = shotHistory[idx];
+                let bgCircle = "bg-white/5 border-white/10 text-white/30";
+                if (shot) {
+                  bgCircle = shot.isGoal 
+                    ? "bg-emerald-500/80 border-emerald-400 text-white shadow-[0_0_6px_rgba(16,185,129,0.5)]" 
+                    : "bg-rose-600/80 border-rose-500 text-white";
+                } else if (idx === shotHistory.length && !isOpponentTurn && gameState === 'PRE_SHOT') {
+                  bgCircle = "bg-sky-500/30 border-sky-400 text-sky-200 animate-pulse";
                 }
-              } else if (idx === shotCount - 1 && gameState === 'PRE_SHOT') {
-                circleClass = "bg-sky-500/20 border-sky-400 text-sky-400 animate-pulse";
-              }
+                return (
+                  <div key={idx} className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center text-[7px] font-extrabold ${bgCircle}`}>
+                    {idx + 1}
+                  </div>
+                );
+              })}
+            </div>
 
-              return (
-                <div 
-                  key={idx} 
-                  className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all duration-300 text-[8px] font-black ${circleClass}`}
-                  title={`Round ${idx + 1}`}
-                >
-                  {idx + 1}
-                </div>
-              );
-            })}
+            {/* Goalkeeper row */}
+            <div className="flex items-center gap-1">
+              <span className="text-[8px] font-mono font-bold text-red-400 w-8 text-right mr-1 uppercase">ATAJAS</span>
+              {Array.from({ length: Math.max(5, opponentHistory.length) }).map((_, idx) => {
+                const shot = opponentHistory[idx];
+                let bgCircle = "bg-white/5 border-white/10 text-white/30";
+                if (shot) {
+                  bgCircle = shot.isGoal 
+                    ? "bg-rose-600/80 border-rose-500 text-white" 
+                    : "bg-emerald-500/80 border-emerald-400 text-white shadow-[0_0_6px_rgba(16,185,129,0.5)]";
+                } else if (idx === opponentHistory.length && isOpponentTurn && gameState === 'PRE_SHOT') {
+                  bgCircle = "bg-sky-500/30 border-sky-400 text-sky-200 animate-pulse";
+                }
+                return (
+                  <div key={idx} className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center text-[7px] font-extrabold ${bgCircle}`}>
+                    {idx + 1}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
 
-        {/* Top-Right Toggles */}
-        <div className="flex items-center gap-2">
-          <button 
-            onClick={handleMuteToggle} 
-            className="w-8 h-8 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-300 hover:text-white transition active:scale-95 cursor-pointer"
-            title="Toggle SFX Mute"
-          >
-            {isAudioMuted ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
-          </button>
-          <button 
-            onClick={onResetMatch} 
-            className="w-8 h-8 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-300 hover:text-white transition active:scale-95 cursor-pointer"
-            title="Rematch / Refresh Game"
-          >
-            <RotateCcw className="w-4 h-4" />
-          </button>
+        {/* Right Team Details */}
+        <div className="flex items-center gap-3">
+          <div className="flex flex-col items-end">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-black text-white uppercase tracking-wider block">
+                {opponentTeam.id}
+              </span>
+              <span className="w-2.5 h-3.5 rounded-sm shadow-sm border border-white/20" style={{ backgroundColor: opponentTeam.colors.shirt }} />
+            </div>
+            <span className="text-[9px] text-red-400 font-bold block leading-none mt-0.5 select-none font-mono">
+              ATAJAS: {opponentScore} G
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <button 
+              onClick={handleMuteToggle} 
+              className="w-8 h-8 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center text-slate-300 hover:bg-white/20 hover:text-white transition active:scale-95 cursor-pointer"
+              title="Sonido"
+            >
+              {isAudioMuted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4 text-[#00E5FF]" />}
+            </button>
+            <button 
+              onClick={onResetMatch} 
+              className="w-8 h-8 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center text-slate-300 hover:bg-white/20 hover:text-white transition active:scale-95 cursor-pointer"
+              title="Reiniciar"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* 3. ACTIVE STRIKER BENTO PANEL */}
+      {/* 4. ACTIVE SWEEPER PRE-SHOT INSTRUCTIONS OR TACTILE CONTROLS */}
       {gameState === 'PRE_SHOT' && (
-        <div className="absolute top-24 left-6 z-20 flex flex-col gap-1 w-44 bg-slate-950/80 border border-slate-900/60 backdrop-blur-md p-3.5 rounded-xl shadow-2xl pointer-events-none transition duration-300">
-          <span className="text-[8px] font-mono tracking-widest text-[#74acdf] font-bold uppercase mb-0.5">
-            ⚽ ACTIVE STRIKER
-          </span>
-          <h4 className="text-xs font-black text-white uppercase tracking-tight truncate">
-            {playerTeam.player}
-          </h4>
-          <p className="text-[9px] font-mono text-slate-500 capitalize mb-2">
-            {playerTeam.name}
-          </p>
-          
-          <div className="flex flex-col gap-1.5 text-[8px] font-mono">
-            {/* Accuracy */}
-            <div>
-              <div className="flex justify-between text-slate-400">
-                <span>ACCURACY</span>
-                <span className="text-emerald-400 font-bold">{playerTeam.accuracy}%</span>
+        <div className="absolute bottom-6 inset-x-0 mx-auto w-full max-w-sm z-20 px-4 pointer-events-auto flex flex-col items-center gap-2">
+          {!isOpponentTurn ? (
+            // Striper's Shot lasers locked panel
+            <>
+              <div className="flex items-center gap-1.5 text-center drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)]">
+                <span className="w-2 h-2 rounded-full bg-[#00E5FF] animate-pulse" />
+                <span className="text-[10px] font-sans font-black tracking-widest text-[#00E5FF] uppercase">
+                  {aimingStep === 0 && "PASO 1: BLOQUEAR DIRECCIÓN"}
+                  {aimingStep === 1 && "PASO 2: BLOQUEAR ALTURA"}
+                  {aimingStep === 2 && "PASO 3: BLOQUEAR FUERZA DEL TIRO!"}
+                </span>
               </div>
-              <div className="w-full h-0.5 bg-slate-900 rounded overflow-hidden">
-                <div className="bg-emerald-400 h-full" style={{ width: `${playerTeam.accuracy}%` }} />
-              </div>
-            </div>
 
-            {/* Power */}
-            <div>
-              <div className="flex justify-between text-slate-400">
-                <span>POWER BAR</span>
-                <span className="text-emerald-400 font-bold">{playerTeam.power}%</span>
-              </div>
-              <div className="w-full h-0.5 bg-slate-900 rounded overflow-hidden">
-                <div className="bg-emerald-400 h-full" style={{ width: `${playerTeam.power}%` }} />
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+              {aimingStep === 2 && (
+                <div className="w-52 bg-[#0d021c]/85 p-2 rounded-full border border-white/10 mt-0.5 animate-fade-in flex flex-col items-center gap-1">
+                  <div className="w-full h-2 bg-black/40 rounded-full relative overflow-hidden flex items-center pr-1">
+                    <div className="absolute left-[70%] w-[16%] h-full bg-[#00FF87]/30 border-x border-[#00FF87]/50" />
+                    <div
+                      id="power-bar-fill"
+                      className={`absolute h-full transition-all duration-[6ms] rounded-full bg-amber-400`}
+                      style={{ width: `${stateRef.current.sweepPower}%` }}
+                    />
+                  </div>
+                  <span id="power-bar-text" className="text-[8px] font-mono tracking-wider text-[#00FF87] font-black uppercase">
+                    PUNTO DULCE: 70% - 86% ({stateRef.current.sweepPower}%)
+                  </span>
+                </div>
+              )}
 
-      {/* 4. ACTIVE SWEEPER STATUS / CONTROLS PANEL */}
-      {gameState === 'PRE_SHOT' && (
-        <div className="absolute bottom-6 inset-x-0 mx-auto w-full max-w-sm z-20 px-4 pointer-events-auto flex flex-col gap-3">
-          <div className="bg-slate-950/90 border border-slate-900/60 backdrop-blur-md p-4 rounded-xl shadow-2xl flex flex-col items-center gap-2">
-            <div className="flex items-center gap-1.5 text-center">
-              <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
-              <span className="text-[10px] font-mono font-extrabold tracking-wider text-slate-300">
-                {aimingStep === 0 && "STEP 1: LOCK KICK WIDTH (TAP TO FREEZE)"}
-                {aimingStep === 1 && "STEP 2: LOCK KICK HEIGHT (TAP TO FREEZE)"}
-                {aimingStep === 2 && "STEP 3: TAP ON GREEN SWEETSPOT TO KICK!"}
+              <p className="text-[8px] tracking-widest text-white/50 uppercase font-mono font-bold drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]">
+                TOCA LA PANTALLA O LA BARRA ESPACIADORA PARA DISPARAR
+              </p>
+            </>
+          ) : (
+            // Goalkeeper direct diving buttons (as requested)
+            <div className="bg-black/65 backdrop-blur-md border border-white/10 rounded-2xl p-3 w-full flex flex-col items-center gap-2 shadow-[0_10px_40px_rgba(0,0,0,0.8)] border-sky-500/20">
+              <span className="text-[10px] font-sans font-black tracking-widest text-sky-400 uppercase">
+                🛡️ ¡TE TOCA ATAJAR! ELIGE DIRECCIÓN 🛡️
               </span>
+              
+              <div className="grid grid-cols-3 gap-2 w-full mt-1">
+                <button
+                  onClick={() => handleKeeperDiveChoice('left')}
+                  className="py-2 px-1 rounded-xl bg-sky-500/10 border border-sky-400/30 text-white font-sans font-black text-[10px] uppercase tracking-wide hover:bg-sky-500/25 active:scale-95 transition-all text-center cursor-pointer shadow-sm"
+                >
+                  ⬅️ VOLAR IZQ
+                </button>
+                <button
+                  onClick={() => handleKeeperDiveChoice('center')}
+                  className="py-2 px-1 rounded-xl bg-sky-500/10 border border-sky-400/30 text-white font-sans font-black text-[10px] uppercase tracking-wide hover:bg-sky-500/25 active:scale-95 transition-all text-center cursor-pointer shadow-sm"
+                >
+                  ⬇️ CENTRO
+                </button>
+                <button
+                  onClick={() => handleKeeperDiveChoice('right')}
+                  className="py-2 px-1 rounded-xl bg-sky-500/10 border border-sky-400/30 text-white font-sans font-black text-[10px] uppercase tracking-wide hover:bg-sky-500/25 active:scale-95 transition-all text-center cursor-pointer shadow-sm"
+                >
+                  VOLAR DER ➡️
+                </button>
+              </div>
             </div>
-
-            {/* Three logical phase steps indicators */}
-            <div className="flex items-center gap-2 w-full justify-center mt-0.5">
-              <div className={`px-2 py-0.5 rounded-md text-[8px] font-mono font-bold ${aimingStep === 0 ? "bg-sky-500 text-slate-950 shadow-[0_0_8px_rgba(56,189,248,0.3)] animate-pulse" : "bg-slate-900 text-slate-600"}`}>
-                1. AIM SIDE
-              </div>
-              <span className="text-slate-800 text-[8px]">▶</span>
-              <div className={`px-2 py-0.5 rounded-md text-[8px] font-mono font-bold ${aimingStep === 1 ? "bg-yellow-500 text-slate-950 shadow-[0_0_8px_rgba(234,179,8,0.3)] animate-pulse" : "bg-slate-900 text-slate-600"}`}>
-                2. AIM HEIGHT
-              </div>
-              <span className="text-slate-800 text-[8px]">▶</span>
-              <div className={`px-2 py-0.5 rounded-md text-[8px] font-mono font-bold ${aimingStep === 2 ? "bg-emerald-500 text-slate-950 shadow-[0_0_8px_rgba(16,185,129,0.3)] animate-pulse" : "bg-slate-900 text-slate-600"}`}>
-                3. FIRE BALL
-              </div>
-            </div>
-
-            {/* Sweeping velocity Timing Bar inside step 3 */}
-            {aimingStep === 2 && (
-              <div className="w-full bg-slate-900 p-2.5 rounded-lg border border-slate-800/80 mt-1 animate-fade-in text-left">
-                <div className="flex justify-between items-center text-[9px] font-mono text-slate-300 mb-1">
-                  <span>STRIKE VELOCITY:</span>
-                  <span className="font-extrabold text-amber-400">{stateRef.current.sweepPower}%</span>
-                </div>
-                
-                <div className="w-full h-3.5 bg-slate-950 rounded-md border border-slate-850 relative overflow-hidden flex items-center">
-                  <div className="absolute left-[70%] w-[16%] h-full bg-emerald-500/20 border-x border-emerald-500/30" />
-                  <div
-                    className={`absolute h-full transition-all duration-[6ms] ${
-                      stateRef.current.sweepPower >= 70 && stateRef.current.sweepPower <= 86
-                        ? 'bg-emerald-500 shadow-[0_0_12px_#10b981]'
-                        : (stateRef.current.sweepPower > 86 ? 'bg-red-500 shadow-[0_0_12px_#ef4444]' : 'bg-amber-400')
-                    }`}
-                    style={{ width: `${stateRef.current.sweepPower}%` }}
-                  />
-                </div>
-                <p className="text-[7.5px] font-mono text-slate-500 text-center mt-1 uppercase">
-                  ⚡ SWEET SPOT: <span className="text-emerald-400 font-semibold">70% - 86%</span>
-                </p>
-              </div>
-            )}
-
-            <button 
-              onClick={handleImmersiveAction}
-              className="w-full py-2 bg-slate-900 hover:bg-slate-850 active:scale-95 transition border border-slate-800 rounded-lg text-[10px] font-mono font-extrabold text-white uppercase text-center cursor-pointer mt-1"
-            >
-              🎯 TAP TOUCH SCREEN / PRESS SPACEBAR
-            </button>
-          </div>
+          )}
         </div>
       )}
 
       {/* 5. MATCH ROUND REVISION / SUMMARY OVERLAYS CARD */}
-      {gameState !== 'PRE_SHOT' && gameState !== 'RUN_UP' && (
-        <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/60 backdrop-blur-sm pointer-events-auto p-6 animate-fade-in">
-          <div className="w-full max-w-sm bg-slate-900 border border-slate-800/80 p-6 rounded-2xl shadow-2xl text-center flex flex-col gap-4">
-            <div>
-              {gameState === 'CELEBRATION' && (
-                <div className="w-12 h-12 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-2xl flex items-center justify-center mx-auto mb-3">
-                  <Trophy className="w-6 h-6" />
-                </div>
-              )}
-              {gameState === 'SAVED' && (
-                <div className="w-12 h-12 bg-sky-500/10 border border-sky-500/30 text-sky-400 rounded-2xl flex items-center justify-center mx-auto mb-3">
-                  <Info className="w-6 h-6" />
-                </div>
-              )}
-              {gameState === 'OUT_OF_BOUNDS' && (
-                <div className="w-12 h-12 bg-red-500/10 border border-red-500/30 text-red-400 rounded-2xl flex items-center justify-center mx-auto mb-3">
-                  <XCircle className="w-6 h-6" />
-                </div>
-              )}
+      {gameState !== 'PRE_SHOT' && gameState !== 'RUN_UP' && gameState !== 'KICK' && (
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-transparent pointer-events-auto p-6 select-none animate-fade-in">
+          <div className="text-center flex flex-col items-center gap-6 animate-scale-up">
+            <div className="flex flex-col items-center gap-1.5">
+              <h1 className="text-5xl md:text-7xl font-display font-black uppercase tracking-wider drop-shadow-[0_8px_16px_rgba(0,0,0,0.95)]">
+                {gameState === 'CELEBRATION' && (
+                  <span className="bg-gradient-to-r from-[#00FF87] to-[#00E5FF] bg-clip-text text-transparent">
+                    {isOpponentTurn ? `¡GOL DE ${opponentTeam.name}! 😞` : '¡GOLAZOOO! ⚽'}
+                  </span>
+                )}
+                {gameState === 'SAVED' && (
+                  <span className="text-[#00E5FF]">
+                    {isOpponentTurn ? '¡ATAJADA HEROICA! 🧤' : '¡TIRO SALVADO! 🧤'}
+                  </span>
+                )}
+                {gameState === 'OUT_OF_BOUNDS' && (
+                  <span className="text-rose-500">
+                    {isOpponentTurn ? '¡EL RIVAL LA TIRÓ FUERA! 🎉' : '¡TIRO DESVIADO! ❌'}
+                  </span>
+                )}
+                {gameState === 'MATCH_OVER' && (
+                  <span className="bg-gradient-to-r from-yellow-400 to-amber-300 bg-clip-text text-transparent animate-pulse">
+                    {score > opponentScore ? '✨ ¡CAMPEÓN! ✨' : '🏆 FIN DE LA COPA 🏆'}
+                  </span>
+                )}
+              </h1>
 
-              <h3 className="text-base font-black text-white uppercase tracking-wider">
-                {gameState === 'CELEBRATION' && "⚽ GOOOOALLL!!! ⚽"}
-                {gameState === 'SAVED' && "🛡️ SAVED! GOALIE STOPPED IT!"}
-                {gameState === 'OUT_OF_BOUNDS' && "⚠️ OUT OF BOUNDS / MISS!"}
-              </h3>
-              <p className="text-[11px] text-slate-400 mt-1 italic">
-                {gameState === 'CELEBRATION' && "A majestic shot with precise placement!"}
-                {gameState === 'SAVED' && "The goalkeeper read and caught your ball!"}
-                {gameState === 'OUT_OF_BOUNDS' && "The shot flew outside the larger goal posts!"}
-              </p>
-            </div>
-
-            <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 flex flex-col gap-2.5 text-xs font-mono">
-              <div className="flex justify-between">
-                <span className="text-slate-500">KICK VELOCITY:</span>
-                <span className={`font-bold ${power >= 70 && power <= 86 ? "text-emerald-400" : "text-amber-400"}`}>{power}%</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">PENALTY ROUND:</span>
-                <span className="text-[#74acdf] font-bold">{shotCount} of 5</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">MATCH SCORE:</span>
-                <span className="text-white font-bold">{score} goals scored</span>
+              <div className="p-3.5 py-2.5 bg-black/60 backdrop-blur-sm border border-white/5 rounded-2xl max-w-sm flex flex-col gap-1 items-center mt-2.5">
+                <p className="text-xs font-sans font-black text-white uppercase tracking-wider text-center">
+                  {gameState === 'CELEBRATION' && (isOpponentTurn ? 'Tu arquero no pudo reaccionar a tiempo.' : '¡Definición perfecta al ángulo!')}
+                  {gameState === 'SAVED' && (isOpponentTurn ? '¡Salvaste el remate con la punta de los dedos!' : 'El portero rival adivinó la trayectoria.')}
+                  {gameState === 'OUT_OF_BOUNDS' && (isOpponentTurn ? '¡Presión total! El oponente falló el disparo.' : '¡Se fue por encima del travesaño!')}
+                  {gameState === 'MATCH_OVER' && (
+                    score > opponentScore 
+                      ? '¡GANASTE EL MUNDIAL DE PENALES! 🏆 Tu selección levanta la Copa Del Mundo.' 
+                      : '¡PERDISTE EL MUNDIAL! Quedaron eliminados en la final. ¡Vuelve a intentarlo!'
+                  )}
+                </p>
+                <div className="text-[10px] text-white/50 font-mono mt-1 font-bold">
+                  {playerTeam.name} {score} - {opponentScore} {opponentTeam.name}
+                </div>
               </div>
             </div>
 
-            {/* Play Again or advance next penalty button */}
             <button
               onClick={onResetMatch}
-              className="w-full py-3.5 bg-emerald-500 text-slate-950 hover:bg-emerald-400 transition font-black text-xs font-mono uppercase tracking-widest rounded-xl shadow-lg active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer"
+              className="py-3 px-8 bg-gradient-to-r from-[#00FF87] to-[#00E5FF] text-[#002f23] transition-all duration-350 font-display font-black text-xs uppercase tracking-widest rounded-full shadow-[0_4px_24px_rgba(0,229,255,0.45)] hover:shadow-[0_4px_36px_rgba(0,229,255,0.7)] active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer border border-[#00FF87]/20 font-extrabold"
             >
-              {shotCount >= 5 ? (
+              {gameState === 'MATCH_OVER' ? (
                 <>
-                  <RotateCcw className="w-4.5 h-4.5" /> REMATCH / PLAY AGAIN
+                  <RotateCcw className="w-3.5 h-3.5" /> ELEGIR OTRO PAÍS / VOLVER A JUGAR
                 </>
               ) : (
                 <>
-                  ⚽ NEXT PENALTY SHOT ⚽
+                  ⚽ CONTINUAR TANDA DE PENALES ⚽
                 </>
               )}
             </button>

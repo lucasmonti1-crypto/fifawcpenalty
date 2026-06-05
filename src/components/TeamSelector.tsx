@@ -23,250 +23,190 @@ export default function TeamSelector({ onSelected }: TeamSelectorProps) {
     setSelectedKeeperIdx(oIdx);
   };
 
-  const currentYear = new Date().getFullYear();
+  const currentYear = 2026;
 
   return (
-    <div className="w-full max-w-5xl mx-auto px-4 py-8 animate-fade-in">
-      {/* Editorial Title */}
-      <div className="text-center mb-10">
-        <span className="bg-emerald-500/10 text-emerald-400 font-mono text-xs uppercase tracking-widest px-3.5 py-1.5 rounded-full border border-emerald-500/20">
-          World Cup {currentYear} Finalists
+    <div className="w-full max-w-2xl mx-auto px-4 py-2 animate-fade-in text-slate-100 flex flex-col justify-center">
+      {/* Immersive Micro WC 26 Branding */}
+      <div className="flex flex-col items-center text-center mb-3 relative select-none">
+        <span className="bg-[#00FF87] text-[#002f23] font-mono text-[8px] uppercase tracking-wider font-black px-2 py-0.5 rounded-full shadow-sm">
+          🏆 COPA MUNDIAL {currentYear} 🏆
         </span>
-        <h1 className="text-4xl md:text-5xl font-black text-white mt-4 tracking-tight drop-shadow-md">
-          PENALTY <span className="text-emerald-400">SHOOTOUT</span>
+        
+        <h1 className="text-xl md:text-2xl font-display font-black mt-1 tracking-wide uppercase drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
+          PENALTY <span className="colors-shine bg-gradient-to-r from-[#00FF87] to-[#00E5FF] bg-clip-text text-transparent">ARENA</span>
         </h1>
-        <p className="text-slate-400 text-sm md:text-base mt-2 max-w-md mx-auto">
-          Choose your striker and opponent goalkeeper to claim the virtual gold.
+        
+        <p className="text-slate-400 text-[9px] mt-0.5 font-sans">
+          Elegí tu delantero y preparate para patear y atajar en la tanda final.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-        {/* Left column: Choose your Striker Team */}
-        <div className="lg:col-span-5 bg-slate-900/80 backdrop-blur border border-slate-800 rounded-2xl p-6 shadow-xl">
-          <div className="flex justify-between items-center mb-5 pb-3 border-b border-slate-800">
-            <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-              <Star className="text-yellow-400 w-4 h-4 fill-yellow-400" /> Choose Striker
+      <div className="flex flex-col gap-3.5 bg-black/40 backdrop-blur-md border border-white/5 rounded-xl p-3 shadow-2xl">
+        
+        {/* SECTION 1: CHOOSE STRIKER */}
+        <div>
+          <div className="flex justify-between items-center mb-1">
+            <h2 className="text-[10px] font-display font-black uppercase text-white flex items-center gap-1 tracking-wider">
+              <Star className="text-[#00FF87] w-3 h-3 fill-[#00FF87]" /> DELANTERO (PATEAR)
             </h2>
-            <span className="text-xs font-mono text-slate-500">
-              {selectedKickerIdx + 1} / {TEAMS.length}
+            <span className="text-[8px] font-mono text-[#00FF87] bg-[#00FF87]/15 px-1 rounded uppercase font-bold">
+              Pateador: {kickerTeam.id}
             </span>
           </div>
 
-          <div className="grid grid-cols-2 gap-2.5 max-h-60 overflow-y-auto pr-1 select-scrollbar mb-5">
-            {TEAMS.map((team, idx) => (
-              <button
-                key={`kicker-${team.id}`}
-                id={`btn-kicker-${team.id}`}
-                onClick={() => {
-                  setSelectedKickerIdx(idx);
-                  if (idx === selectedKeeperIdx) {
-                    setSelectedKeeperIdx((idx + 1) % TEAMS.length);
-                  }
-                }}
-                className={`flex items-center gap-3 p-3 rounded-xl transition duration-200 border text-left text-sm ${
-                  idx === selectedKickerIdx
-                    ? 'bg-emerald-500/10 border-emerald-500 text-white'
-                    : 'bg-slate-950/40 border-slate-800/60 text-slate-400 hover:border-slate-700 hover:text-slate-200'
-                }`}
-              >
-                {/* Visual Jersey Icon */}
-                <div
-                  className="w-4 h-5 rounded-sm relative flex shrink-0"
-                  style={{
-                    backgroundColor: team.colors.shirt,
-                    border: '1px solid rgba(255,255,255,0.2)'
+          {/* Súper compacto flag grid */}
+          <div className="grid grid-cols-5 md:grid-cols-10 gap-1">
+            {TEAMS.map((team, idx) => {
+              const isSelected = idx === selectedKickerIdx;
+              return (
+                <button
+                  key={`kicker-${team.id}`}
+                  id={`btn-kicker-${team.id}`}
+                  onClick={() => {
+                    setSelectedKickerIdx(idx);
+                    if (idx === selectedKeeperIdx) {
+                      setSelectedKeeperIdx((idx + 1) % TEAMS.length);
+                    }
                   }}
+                  className={`flex flex-col items-center justify-center p-1 rounded transition-all duration-150 border cursor-pointer ${
+                    isSelected
+                      ? 'bg-gradient-to-b from-[#00FF87]/15 to-[#00E5FF]/20 border-[#00FF87] text-white shadow-[0_0_8px_rgba(0,255,135,0.2)] scale-102'
+                      : 'bg-white/5 border-white/5 text-slate-300 hover:bg-white/10 hover:border-white/10'
+                  }`}
+                  title={`${team.name} - ${team.player}`}
                 >
-                  {team.colors.pattern === 'stripes' && (
-                    <div
-                      className="absolute inset-0 flex justify-around"
-                      style={{ opacity: 0.6 }}
-                    >
-                      <div className="w-[2px] h-full" style={{ backgroundColor: team.colors.stripes }} />
-                      <div className="w-[2px] h-full" style={{ backgroundColor: team.colors.stripes }} />
-                    </div>
-                  )}
-                  {team.colors.pattern === 'squares' && (
-                    <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 opacity-50">
-                      <div style={{ backgroundColor: team.colors.stripes }} />
-                      <div />
-                      <div />
-                      <div style={{ backgroundColor: team.colors.stripes }} />
-                    </div>
-                  )}
-                </div>
-                <div className="truncate">
-                  <p className="font-bold tracking-tight">{team.name}</p>
-                  <p className="text-[11px] font-mono opacity-70 truncate">{team.player}</p>
-                </div>
-              </button>
-            ))}
+                  <div
+                    className="w-3.5 h-3.5 rounded-sm relative flex shrink-0 shadow-sm"
+                    style={{
+                      backgroundColor: team.colors.shirt,
+                      border: '1px solid rgba(255,255,255,0.2)'
+                    }}
+                  >
+                    {team.colors.pattern === 'stripes' && (
+                      <div className="absolute inset-0 flex justify-around opacity-60">
+                        <div className="w-[1px] h-full" style={{ backgroundColor: team.colors.stripes }} />
+                        <div className="w-[1px] h-full" style={{ backgroundColor: team.colors.stripes }} />
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-[8px] font-mono font-bold mt-1">{team.id}</span>
+                </button>
+              );
+            })}
           </div>
 
-          {/* Striker Stats Cards Panel */}
-          <div className="bg-slate-950/80 border border-slate-800/80 rounded-xl p-5 relative overflow-hidden">
-            {/* Custom jersey decoration */}
-            <div className="absolute -right-6 -bottom-6 w-24 h-24 rotate-12 opacity-15" style={{ color: kickerTeam.colors.shirt }}>
-              <div className="w-16 h-20 rounded-md shadow-2xl relative" style={{ backgroundColor: kickerTeam.colors.shirt }}>
-                {kickerTeam.colors.pattern === 'stripes' && <div className="absolute inset-0 flex justify-around"><div className="w-2 h-full opacity-60" style={{ backgroundColor: kickerTeam.colors.stripes }} /><div className="w-2 h-full opacity-60" style={{ backgroundColor: kickerTeam.colors.stripes }} /></div>}
-              </div>
+          {/* Pequeño panel de estadísticas por debajo del Pateador */}
+          <div className="mt-1.5 bg-white/5 border border-white/5 rounded-lg p-2 flex flex-row items-center justify-between gap-2.5 animate-fade-in">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-black uppercase text-white font-display tracking-wide">{kickerTeam.player}</span>
+              <span className="text-[8px] font-mono text-slate-400">({kickerTeam.name})</span>
             </div>
-
-            <p className="text-[11px] font-mono uppercase tracking-widest text-emerald-400 font-semibold mb-0.5">Striker Star</p>
-            <h3 className="text-xl font-black text-slate-100">{kickerTeam.player}</h3>
-            <p className="text-xs text-slate-500 font-mono mt-0.5">{kickerTeam.name.toUpperCase()} SQUAD</p>
-
-            <div className="mt-5 space-y-3.5">
-              {/* Acc slider */}
-              <div>
-                <div className="flex justify-between text-xs font-mono text-slate-400 mb-1">
-                  <span className="flex items-center gap-1"><Compass className="w-3.5 h-3.5 text-lime-400" /> ACCURACY</span>
-                  <span className="text-slate-100 font-bold">{kickerTeam.accuracy}</span>
-                </div>
-                <div className="w-full bg-slate-800/60 rounded-full h-1.5 overflow-hidden">
-                  <div
-                    className="bg-lime-400 h-full rounded-full transition-all duration-500"
-                    style={{ width: `${kickerTeam.accuracy}%` }}
-                  />
-                </div>
+            
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[8px] font-mono text-slate-400 flex items-center gap-0.5"><Compass className="w-2 h-2 text-[#00FF87]" /> PREC</span>
+                <span className="text-[9px] font-mono text-white font-bold">{kickerTeam.accuracy}%</span>
               </div>
 
-              {/* Power slider */}
-              <div>
-                <div className="flex justify-between text-xs font-mono text-slate-400 mb-1">
-                  <span className="flex items-center gap-1"><Zap className="w-3.5 h-3.5 text-orange-400" /> POWER</span>
-                  <span className="text-slate-100 font-bold">{kickerTeam.power}</span>
-                </div>
-                <div className="w-full bg-slate-800/60 rounded-full h-1.5 overflow-hidden">
-                  <div
-                    className="bg-orange-400 h-full rounded-full transition-all duration-500"
-                    style={{ width: `${kickerTeam.power}%` }}
-                  />
-                </div>
-              </div>
-
-              {/* Curve Slider */}
-              <div>
-                <div className="flex justify-between text-xs font-mono text-slate-400 mb-1">
-                  <span className="flex items-center gap-1"><RefreshCw className="w-3.5 h-3.5 text-cyan-400" /> CURVE / SPIN</span>
-                  <span className="text-slate-100 font-bold">{kickerTeam.curve}</span>
-                </div>
-                <div className="w-full bg-slate-800/60 rounded-full h-1.5 overflow-hidden">
-                  <div
-                    className="bg-cyan-400 h-full rounded-full transition-all duration-500"
-                    style={{ width: `${kickerTeam.curve}%` }}
-                  />
-                </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[8px] font-mono text-slate-400 flex items-center gap-0.5"><Zap className="w-2 h-2 text-[#00E5FF]" /> FUERZA</span>
+                <span className="text-[9px] font-mono text-white font-bold">{kickerTeam.power}%</span>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Center VS Divider and action */}
-        <div className="lg:col-span-2 flex flex-col items-center justify-center gap-3 self-stretch min-h-[140px] lg:min-h-0">
-          <div className="w-12 h-12 bg-slate-950/80 border border-slate-800 rounded-full flex items-center justify-center font-black text-emerald-400 text-lg shadow-lg relative shrink-0">
-            VS
-            <div className="absolute -inset-0.5 bg-emerald-500/25 blur rounded-full -z-10" />
-          </div>
-
+        {/* INTERMEDIATE SHUFFLE BAR */}
+        <div className="flex justify-center -my-1 select-none">
           <button
             id="btn-randomize-teams"
             onClick={handleRandomize}
-            className="flex items-center gap-1.5 text-[11px] font-mono text-slate-500 hover:text-emerald-400 transition bg-slate-950/40 hover:bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg shrink-0 mt-2"
+            className="flex items-center gap-1 text-[8px] font-mono text-slate-400 hover:text-[#00FF87] hover:border-[#00FF87]/30 transition bg-white/5 border border-white/5 px-2.5 py-0.5 rounded-full cursor-pointer shadow-md"
           >
-            <RefreshCw className="w-3 h-3 animate-spin-hover" /> RANDOMIZE
+            <RefreshCw className="w-2 h-2 animate-spin-slow" /> MEZCLAR SELECCIONES
           </button>
         </div>
 
-        {/* Right column: Choose GK Team */}
-        <div className="lg:col-span-5 bg-slate-900/80 backdrop-blur border border-slate-800 rounded-2xl p-6 shadow-xl">
-          <div className="flex justify-between items-center mb-5 pb-3 border-b border-slate-800">
-            <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-              <ShieldAlert className="text-amber-400 w-4 h-4" /> Opponent Goalkeeper
+        {/* SECTION 2: CHOOSE KEEPER */}
+        <div>
+          <div className="flex justify-between items-center mb-1">
+            <h2 className="text-[10px] font-display font-black uppercase text-white flex items-center gap-1 tracking-wider">
+              <ShieldAlert className="text-[#00E5FF] w-3 h-3" /> ARQUERO OPONENTE (ATAJAR)
             </h2>
-            <span className="text-xs font-mono text-slate-500">
-              {selectedKeeperIdx + 1} / {TEAMS.length}
+            <span className="text-[8px] font-mono text-[#00E5FF] bg-[#00E5FF]/15 px-1 rounded uppercase font-bold">
+              Rival: {keeperTeam.id}
             </span>
           </div>
 
-          <div className="grid grid-cols-2 gap-2.5 max-h-60 overflow-y-auto pr-1 select-scrollbar mb-5">
-            {TEAMS.map((team, idx) => (
-              <button
-                key={`keeper-${team.id}`}
-                id={`btn-keeper-${team.id}`}
-                disabled={idx === selectedKickerIdx}
-                onClick={() => setSelectedKeeperIdx(idx)}
-                className={`flex items-center gap-3 p-3 rounded-xl transition duration-200 border text-left text-sm ${
-                  idx === selectedKeeperIdx
-                    ? 'bg-amber-500/10 border-amber-500 text-white'
-                    : 'bg-slate-950/40 border-slate-800/60 text-slate-400 hover:border-slate-700 hover:text-slate-200 disabled:opacity-30 disabled:cursor-not-allowed'
-                }`}
-              >
-                {/* Visual Jersey Icon */}
-                <div
-                  className="w-4 h-5 rounded-sm relative flex shrink-0"
-                  style={{
-                    backgroundColor: team.colors.shirt,
-                    border: '1px solid rgba(255,255,255,0.2)'
-                  }}
+          {/* Súper compacto flag grid */}
+          <div className="grid grid-cols-5 md:grid-cols-10 gap-1">
+            {TEAMS.map((team, idx) => {
+              const isSelected = idx === selectedKeeperIdx;
+              const isKicker = idx === selectedKickerIdx;
+              return (
+                <button
+                  key={`keeper-${team.id}`}
+                  id={`btn-keeper-${team.id}`}
+                  disabled={isKicker}
+                  onClick={() => setSelectedKeeperIdx(idx)}
+                  className={`flex flex-col items-center justify-center p-1 rounded transition-all duration-150 border cursor-pointer disabled:opacity-10 disabled:cursor-not-allowed ${
+                    isSelected
+                      ? 'bg-gradient-to-b from-[#00E5FF]/15 to-[#00FF87]/20 border-[#00E5FF] text-white shadow-[0_0_8px_rgba(0,229,255,0.25)] scale-102'
+                      : 'bg-white/5 border-white/5 text-slate-300 hover:bg-white/10 hover:border-white/10'
+                  }`}
+                  title={`${team.name} Goalkeeper`}
                 >
-                  {team.colors.pattern === 'stripes' && (
-                    <div
-                      className="absolute inset-0 flex justify-around"
-                      style={{ opacity: 0.6 }}
-                    >
-                      <div className="w-[2px] h-full" style={{ backgroundColor: team.colors.stripes }} />
-                      <div className="w-[2px] h-full" style={{ backgroundColor: team.colors.stripes }} />
-                    </div>
-                  )}
-                  {team.colors.pattern === 'squares' && (
-                    <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 opacity-50">
-                      <div style={{ backgroundColor: team.colors.stripes }} />
-                      <div />
-                      <div />
-                      <div style={{ backgroundColor: team.colors.stripes }} />
-                    </div>
-                  )}
-                </div>
-                <div className="truncate">
-                  <p className="font-bold tracking-tight">{team.name}</p>
-                  <p className="text-[11px] font-mono opacity-70 truncate">Defensive Wall</p>
-                </div>
-              </button>
-            ))}
+                  <div
+                    className="w-3.5 h-3.5 rounded-sm relative flex shrink-0 shadow-sm"
+                    style={{
+                      backgroundColor: team.colors.shirt,
+                      border: '1px solid rgba(255,255,255,0.2)'
+                    }}
+                  >
+                    {team.colors.pattern === 'stripes' && (
+                      <div className="absolute inset-0 flex justify-around opacity-60">
+                        <div className="w-[1px] h-full" style={{ backgroundColor: team.colors.stripes }} />
+                        <div className="w-[1px] h-full" style={{ backgroundColor: team.colors.stripes }} />
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-[8px] font-mono font-bold mt-1">{team.id}</span>
+                </button>
+              );
+            })}
           </div>
 
-          {/* Keeper dynamic display info */}
-          <div className="bg-slate-950/80 border border-slate-800/80 rounded-xl p-5 relative overflow-hidden">
-            {/* Custom jersey decoration */}
-            <div className="absolute -right-6 -bottom-6 w-24 h-24 rotate-12 opacity-15" style={{ color: keeperTeam.colors.shirt }}>
-              <div className="w-16 h-20 rounded-md shadow-2xl relative" style={{ backgroundColor: keeperTeam.colors.shirt }}>
-                {keeperTeam.colors.pattern === 'stripes' && <div className="absolute inset-0 flex justify-around"><div className="w-2 h-full opacity-60" style={{ backgroundColor: keeperTeam.colors.stripes }} /><div className="w-2 h-full opacity-60" style={{ backgroundColor: keeperTeam.colors.stripes }} /></div>}
+          {/* Pequeño panel de estadísticas por debajo del Arquero */}
+          <div className="mt-1.5 bg-white/5 border border-white/5 rounded-lg p-2 flex flex-row items-center justify-between gap-2.5 animate-fade-in">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-black uppercase text-white font-display tracking-wide">{keeperTeam.player}</span>
+              <span className="text-[8px] font-mono text-slate-400">({keeperTeam.name})</span>
+            </div>
+            
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[8px] font-mono text-[#00E5FF] bg-[#00E5FF]/10 px-1.5 py-0.5 rounded font-black">
+                  IA INTELIGENTE
+                </span>
+                <span className="text-[9px] font-mono text-slate-400">Atajador Adaptativo</span>
               </div>
             </div>
-
-            <p className="text-[11px] font-mono uppercase tracking-widest text-amber-500 font-semibold mb-0.5">Goalkeeper Unit</p>
-            <h3 className="text-xl font-black text-slate-100">{keeperTeam.name} Defense</h3>
-            <p className="text-xs text-slate-500 font-mono mt-0.5">ADAPTIVE PATTERN AI ACTIVE</p>
-
-            <p className="text-xs text-slate-400 mt-4 leading-relaxed">
-              The {keeperTeam.name} keeper tracks your patterns. Shoots aimed repeatedly in the same sector will trigger automatic keeper anticipation! Change directions often.
-            </p>
           </div>
         </div>
+
       </div>
 
-      {/* Play Action Confirmation Button */}
-      <div className="mt-12 flex justify-center">
+      {/* Action validation confirmation bar */}
+      <div className="mt-4 flex justify-center">
         <button
           id="btn-start-match"
           onClick={() => onSelected(kickerTeam, keeperTeam)}
-          className="group relative px-10 py-4 rounded-xl font-black uppercase text-sm tracking-widest bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-xl transition-all duration-300 transform hover:-translate-y-0.5 hover:shadow-emerald-500/25 cursor-pointer"
+          className="group relative px-8 py-2.5 rounded-full font-display font-black uppercase text-[10px] tracking-wider bg-gradient-to-r from-[#00FF87] to-[#00E5FF] text-[#002f23] shadow-lg hover:shadow-[0_0_15px_rgba(0,229,255,0.5)] transition-all duration-200 hover:scale-103 active:scale-97 cursor-pointer"
         >
-          <span className="flex items-center gap-2">
-            START penalty shootout <Trophy className="w-4 h-4 fill-slate-950" />
+          <span className="flex items-center gap-1.5">
+            INICIAR PENALES <Trophy className="w-3 h-3 fill-[#002f23]" />
           </span>
-          <div className="absolute inset-0 rounded-xl -z-10 bg-emerald-500 opacity-20 blur-lg group-hover:opacity-40 transition-opacity" />
         </button>
       </div>
     </div>
