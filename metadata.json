@@ -1,0 +1,6 @@
+{
+  "name": "World Cup 2026 Penalty Shootout",
+  "description": "A 3D perspective-based penalty shootout mini-game featuring 10 national teams, custom sound effects, immersive run-up and shooting animations, moving power bar with a perfect shot zone, curve control, and interactive goalkeeper AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
