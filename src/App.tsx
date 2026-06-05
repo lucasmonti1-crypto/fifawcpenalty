@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Team, GameState, ShotDirection, ShotHeight, ShotResult, TEAMS } from './types';
 import TeamSelector from './components/TeamSelector';
 import StadiumCanvas from './components/StadiumCanvas';
@@ -26,6 +26,27 @@ export default function App() {
   const [curve, setCurve] = useState(0);
 
   const [currentShotNum, setCurrentShotNum] = useState(1); // Standard Round: 1 to 5+
+
+  // A ref to store the latest values of crucial score/turn states to avoid React's stale closure problems during fast canvas ticks
+  const latestStateRef = useRef({
+    score,
+    opponentScore,
+    shotHistory,
+    opponentHistory,
+    currentShotNum,
+    isOpponentTurn,
+  });
+
+  useEffect(() => {
+    latestStateRef.current = {
+      score,
+      opponentScore,
+      shotHistory,
+      opponentHistory,
+      currentShotNum,
+      isOpponentTurn,
+    };
+  }, [score, opponentScore, shotHistory, opponentHistory, currentShotNum, isOpponentTurn]);
 
   // Initialize and unlock audio context upon first meaningful user screen gesture
   const handleTeamSelected = (yourTeam: Team, defenderTeam: Team) => {
@@ -94,58 +115,59 @@ export default function App() {
   };
 
   const handleShotComplete = (result: ShotResult) => {
-    if (!isOpponentTurn) {
-      // User just shot
-      setShotHistory((prev) => {
-        const nextHistory = [...prev, result];
-        let nextUserScore = score;
-        if (result.isGoal) {
-          nextUserScore += 1;
-          setScore(nextUserScore);
-        }
+    const {
+      score: currentScore,
+      opponentScore: currentOpponentScore,
+      shotHistory: currentShotHistory,
+      opponentHistory: currentOpponentHistory,
+      currentShotNum: round,
+      isOpponentTurn: isOppTurn
+    } = latestStateRef.current;
 
-        // Check if user's kick mathematically decided the match early
-        const isEnded = checkMatchOver(nextUserScore, opponentScore, currentShotNum, nextHistory, opponentHistory);
-        if (isEnded) {
-          setGameState('MATCH_OVER');
-        } else {
-          // Normal transition to Saved/Goal results
-          if (result.isGoal) {
-            setGameState('CELEBRATION');
-          } else if (result.isSaved || result.hitWoodwork) {
-            setGameState('SAVED');
-          } else if (result.isOffTarget) {
-            setGameState('OUT_OF_BOUNDS');
-          }
+    if (!isOppTurn) {
+      // User just shot
+      const nextUserScore = result.isGoal ? currentScore + 1 : currentScore;
+      const nextHistory = [...currentShotHistory, result];
+      
+      setScore(nextUserScore);
+      setShotHistory(nextHistory);
+
+      // Check if user's kick mathematically decided the match early
+      const isEnded = checkMatchOver(nextUserScore, currentOpponentScore, round, nextHistory, currentOpponentHistory);
+      if (isEnded) {
+        setGameState('MATCH_OVER');
+      } else {
+        // Normal transition to Saved/Goal results
+        if (result.isGoal) {
+          setGameState('CELEBRATION');
+        } else if (result.isSaved || result.hitWoodwork) {
+          setGameState('SAVED');
+        } else if (result.isOffTarget) {
+          setGameState('OUT_OF_BOUNDS');
         }
-        return nextHistory;
-      });
+      }
     } else {
       // Opponent just shot
-      setOpponentHistory((prev) => {
-        const nextHistory = [...prev, result];
-        let nextOpponentScore = opponentScore;
-        if (result.isGoal) {
-          nextOpponentScore += 1;
-          setOpponentScore(nextOpponentScore);
-        }
+      const nextOpponentScore = result.isGoal ? currentOpponentScore + 1 : currentOpponentScore;
+      const nextHistory = [...currentOpponentHistory, result];
 
-        // Check if opponent's kick decided the match
-        const isEnded = checkMatchOver(score, nextOpponentScore, currentShotNum, shotHistory, nextHistory);
-        if (isEnded) {
-          setGameState('MATCH_OVER');
-        } else {
-          // Normal transition to Saved/Goal results for Opponent
-          if (result.isGoal) {
-            setGameState('CELEBRATION');
-          } else if (result.isSaved || result.hitWoodwork) {
-            setGameState('SAVED');
-          } else if (result.isOffTarget) {
-            setGameState('OUT_OF_BOUNDS');
-          }
+      setOpponentScore(nextOpponentScore);
+      setOpponentHistory(nextHistory);
+
+      // Check if opponent's kick decided the match
+      const isEnded = checkMatchOver(currentScore, nextOpponentScore, round, currentShotHistory, nextHistory);
+      if (isEnded) {
+        setGameState('MATCH_OVER');
+      } else {
+        // Normal transition to Saved/Goal results for Opponent
+        if (result.isGoal) {
+          setGameState('CELEBRATION');
+        } else if (result.isSaved || result.hitWoodwork) {
+          setGameState('SAVED');
+        } else if (result.isOffTarget) {
+          setGameState('OUT_OF_BOUNDS');
         }
-        return nextHistory;
-      });
+      }
     }
   };
 

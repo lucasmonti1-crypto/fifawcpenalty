@@ -38,12 +38,12 @@ class AudioEngine {
   private startAmbientHum() {
     if (!this.ctx || this.isMuted) return;
 
-    // Create custom noise buffer for stadium background hum
-    const bufferSize = this.ctx.sampleRate * 2;
+    // Create custom noise buffer for stadium background hum (4 seconds of unique noise)
+    const bufferSize = this.ctx.sampleRate * 4;
     const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
     const data = buffer.getChannelData(0);
     
-    // Fill with pink-ish noise
+    // Fill with pink-ish noise for wind/distant crowd rumble
     let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
     for (let i = 0; i < bufferSize; i++) {
       const white = Math.random() * 2 - 1;
@@ -54,8 +54,14 @@ class AudioEngine {
       b4 = 0.55000 * b4 + white * 0.5329522;
       b5 = -0.7616 * b5 - white * 0.0168980;
       data[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
-      data[i] *= 0.11; // scale pink noise down
+      data[i] *= 0.06; // scale pink noise down
       b6 = white * 0.115926;
+      
+      // Keep subtle remote horns and cheering spikes inside ambient loop
+      if (i % 90000 === 0 && i > 0) {
+        const hornPhase = Math.sin(i * 0.008);
+        data[i] += hornPhase * 0.12;
+      }
     }
 
     this.humSource = this.ctx.createBufferSource();
@@ -64,10 +70,10 @@ class AudioEngine {
 
     this.humNode = this.ctx.createBiquadFilter();
     this.humNode.type = 'lowpass';
-    this.humNode.frequency.setValueAtTime(150, this.ctx.currentTime);
+    this.humNode.frequency.setValueAtTime(260, this.ctx.currentTime); // higher frequency for stadium presence
 
     this.gainHum = this.ctx.createGain();
-    this.gainHum.gain.setValueAtTime(0.04, this.ctx.currentTime);
+    this.gainHum.gain.setValueAtTime(0.065, this.ctx.currentTime); // louder ambient hum
 
     this.humSource.connect(this.humNode);
     this.humNode.connect(this.gainHum);
@@ -76,34 +82,34 @@ class AudioEngine {
     this.humSource.start(0);
   }
 
-  public playKick(intensity = 0.8) {
+  public playKick(intensity = 0.85) {
     this.init();
     if (!this.ctx || this.isMuted) return;
     
     const now = this.ctx.currentTime;
     
-    // Low punch
+    // Solid organic leather-ball punch
     const osc = this.ctx.createOscillator();
     const gainNode = this.ctx.createGain();
     
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(160, now);
-    osc.frequency.exponentialRampToValueAtTime(45, now + 0.12);
+    osc.type = 'triangle'; // triangle has richer harmonic thud than pure sine
+    osc.frequency.setValueAtTime(190, now);
+    osc.frequency.exponentialRampToValueAtTime(52, now + 0.09);
     
-    gainNode.gain.setValueAtTime(intensity * 0.7, now);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+    gainNode.gain.setValueAtTime(intensity * 1.0, now);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
     
     osc.connect(gainNode);
     gainNode.connect(this.ctx.destination);
     osc.start(now);
-    osc.stop(now + 0.16);
+    osc.stop(now + 0.2);
 
-    // Kicking impact noise
+    // Leather ball slap click
     const noise = this.ctx.createBufferSource();
     const noiseGain = this.ctx.createGain();
     const noiseFilter = this.ctx.createBiquadFilter();
 
-    const bufferSize = this.ctx.sampleRate * 0.05;
+    const bufferSize = this.ctx.sampleRate * 0.04;
     const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
     const data = buffer.getChannelData(0);
     for (let i = 0; i < bufferSize; i++) {
@@ -112,18 +118,18 @@ class AudioEngine {
 
     noise.buffer = buffer;
     noiseFilter.type = 'bandpass';
-    noiseFilter.frequency.setValueAtTime(200, now);
-    noiseFilter.Q.setValueAtTime(3, now);
+    noiseFilter.frequency.setValueAtTime(320, now);
+    noiseFilter.Q.setValueAtTime(5.0, now);
 
-    noiseGain.gain.setValueAtTime(intensity * 0.4, now);
-    noiseGain.gain.exponentialRampToValueAtTime(0.01, now + 0.06);
+    noiseGain.gain.setValueAtTime(intensity * 0.55, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
 
     noise.connect(noiseFilter);
     noiseFilter.connect(noiseGain);
     noiseGain.connect(this.ctx.destination);
 
     noise.start(now);
-    noise.stop(now + 0.07);
+    noise.stop(now + 0.06);
   }
 
   public playWhistle() {
@@ -168,13 +174,13 @@ class AudioEngine {
     if (!this.ctx || this.isMuted) return;
 
     const now = this.ctx.currentTime;
-    const cheerDuration = 3.0;
+    const cheerDuration = 3.2;
 
     const bufferSize = this.ctx.sampleRate * cheerDuration;
     const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
     const data = buffer.getChannelData(0);
     
-    // White noise for roaring sound
+    // White noise for roaring sound in stadium
     for (let i = 0; i < bufferSize; i++) {
       data[i] = Math.random() * 2 - 1;
     }
@@ -184,16 +190,16 @@ class AudioEngine {
 
     const filter = this.ctx.createBiquadFilter();
     filter.type = 'bandpass';
-    // Slowly shift filter from low-mid to high to simulate growing enthusiasm
+    // Shift filter from low-mid to high to simulate explosive enthusiasm
     filter.frequency.setValueAtTime(250, now);
-    filter.frequency.exponentialRampToValueAtTime(1200, now + 0.5);
-    filter.frequency.exponentialRampToValueAtTime(400, now + cheerDuration);
-    filter.Q.setValueAtTime(1.2, now);
+    filter.frequency.exponentialRampToValueAtTime(1300, now + 0.45);
+    filter.frequency.exponentialRampToValueAtTime(450, now + cheerDuration);
+    filter.Q.setValueAtTime(1.1, now);
 
     const gainNode = this.ctx.createGain();
     gainNode.gain.setValueAtTime(0, now);
-    gainNode.gain.linearRampToValueAtTime(0.25, now + 0.3); // explosive swell
-    gainNode.gain.exponentialRampToValueAtTime(0.12, now + 1.2);
+    gainNode.gain.linearRampToValueAtTime(0.32, now + 0.28); // explosive swell
+    gainNode.gain.exponentialRampToValueAtTime(0.14, now + 1.2);
     gainNode.gain.exponentialRampToValueAtTime(0.001, now + cheerDuration);
 
     noise.connect(filter);
@@ -203,19 +209,19 @@ class AudioEngine {
     noise.start(now);
     noise.stop(now + cheerDuration + 0.1);
 
-    // Warm underlying bass note for stadium vibe
+    // Warm underlying bass note for stadium crowd thickness
     const synthTone = this.ctx.createOscillator();
     const synthGain = this.ctx.createGain();
     synthTone.type = 'sawtooth';
     synthTone.frequency.setValueAtTime(110, now);
-    synthTone.frequency.exponentialRampToValueAtTime(130, now + 0.5);
+    synthTone.frequency.exponentialRampToValueAtTime(135, now + 0.5);
     
     const toneFilter = this.ctx.createBiquadFilter();
     toneFilter.type = 'lowpass';
-    toneFilter.frequency.setValueAtTime(300, now);
+    toneFilter.frequency.setValueAtTime(320, now);
 
     synthGain.gain.setValueAtTime(0, now);
-    synthGain.gain.linearRampToValueAtTime(0.05, now + 0.3);
+    synthGain.gain.linearRampToValueAtTime(0.06, now + 0.3);
     synthGain.gain.exponentialRampToValueAtTime(0.001, now + 1.5);
 
     synthTone.connect(toneFilter);
@@ -224,6 +230,80 @@ class AudioEngine {
 
     synthTone.start(now);
     synthTone.stop(now + 1.6);
+
+    // Vocal synthesis for commentator shouting "GOOOOOOOOL!!!"
+    const commFund = 105; // deep masculine commentator pitch
+    const commOsc = this.ctx.createOscillator();
+    const commHarm = this.ctx.createOscillator();
+    const commGain = this.ctx.createGain();
+    const commLowpass = this.ctx.createBiquadFilter();
+    const commFormant = this.ctx.createBiquadFilter();
+
+    commOsc.type = 'sawtooth';
+    commOsc.frequency.setValueAtTime(commFund, now);
+    commOsc.frequency.linearRampToValueAtTime(commFund - 6, now + 0.6);
+    commOsc.frequency.linearRampToValueAtTime(commFund - 12, now + 1.8);
+
+    commHarm.type = 'triangle';
+    commHarm.frequency.setValueAtTime(commFund * 2.0, now);
+    commHarm.frequency.linearRampToValueAtTime((commFund - 6) * 2.0, now + 0.6);
+    
+    // Vocal "O" formant filter mapping
+    commFormant.type = 'bandpass';
+    commFormant.frequency.setValueAtTime(540, now); // center first vowel vocal formant
+    commFormant.Q.setValueAtTime(2.6, now);
+
+    commLowpass.type = 'lowpass';
+    commLowpass.frequency.setValueAtTime(1300, now);
+
+    // Swell gain for "GOOOOOOOOOL!!!"
+    commGain.gain.setValueAtTime(0, now);
+    commGain.gain.linearRampToValueAtTime(0.24, now + 0.12);
+    commGain.gain.linearRampToValueAtTime(0.20, now + 1.2);
+    commGain.gain.exponentialRampToValueAtTime(0.001, now + 2.0);
+
+    commOsc.connect(commFormant);
+    commHarm.connect(commFormant);
+    commFormant.connect(commLowpass);
+    commLowpass.connect(commGain);
+    commGain.connect(this.ctx.destination);
+
+    commOsc.start(now);
+    commHarm.start(now);
+    commOsc.stop(now + 2.1);
+    commHarm.stop(now + 2.1);
+
+    // Chanted secondary commentator shout "GOL-A-ZO!"
+    const chantTime = now + 1.6;
+    const syllables = [
+       { pitch: 120, dur: 0.22, textFreq: 500 }, // "gol"
+       { pitch: 140, dur: 0.18, textFreq: 950 }, // "a"
+       { pitch: 110, dur: 0.35, textFreq: 450 }  // "zo"
+    ];
+    syllables.forEach((syll, idx) => {
+       const sTime = chantTime + idx * 0.25;
+       const sOsc = this.ctx.createOscillator();
+       const sFilter = this.ctx.createBiquadFilter();
+       const sGain = this.ctx.createGain();
+
+       sOsc.type = 'sawtooth';
+       sOsc.frequency.setValueAtTime(syll.pitch, sTime);
+
+       sFilter.type = 'bandpass';
+       sFilter.frequency.setValueAtTime(syll.textFreq, sTime);
+       sFilter.Q.setValueAtTime(3.0, sTime);
+
+       sGain.gain.setValueAtTime(0, sTime);
+       sGain.gain.linearRampToValueAtTime(0.18, sTime + 0.04);
+       sGain.gain.exponentialRampToValueAtTime(0.001, sTime + syll.dur);
+
+       sOsc.connect(sFilter);
+       sFilter.connect(sGain);
+       sGain.connect(this.ctx.destination);
+
+       sOsc.start(sTime);
+       sOsc.stop(sTime + syll.dur + 0.05);
+    });
   }
 
   public playGasp() {
@@ -260,6 +340,90 @@ class AudioEngine {
 
     noise.start(now);
     noise.stop(now + duration + 0.1);
+  }
+
+  public playGKSave(intensity = 0.8) {
+    this.init();
+    if (!this.ctx || this.isMuted) return;
+
+    const now = this.ctx.currentTime;
+    
+    // 1. Solid blunt leather slap thud (gloves matching ball)
+    const oscillator = this.ctx.createOscillator();
+    const gainNode = this.ctx.createGain();
+    
+    oscillator.type = 'triangle';
+    oscillator.frequency.setValueAtTime(220, now);
+    oscillator.frequency.exponentialRampToValueAtTime(68, now + 0.12);
+    
+    gainNode.gain.setValueAtTime(intensity * 1.1, now);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.16);
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(this.ctx.destination);
+    oscillator.start(now);
+    oscillator.stop(now + 0.18);
+
+    // High smack noise
+    const noise = this.ctx.createBufferSource();
+    const noiseGain = this.ctx.createGain();
+    const noiseFilter = this.ctx.createBiquadFilter();
+
+    const bufferSize = this.ctx.sampleRate * 0.06;
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = Math.random() * 2 - 1;
+    }
+
+    noise.buffer = buffer;
+    noiseFilter.type = 'bandpass';
+    noiseFilter.frequency.setValueAtTime(420, now);
+    noiseFilter.Q.setValueAtTime(3.8, now);
+
+    noiseGain.gain.setValueAtTime(intensity * 0.58, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(this.ctx.destination);
+
+    noise.start(now);
+    noise.stop(now + 0.07);
+
+    // 2. Crowd sudden sharp gasp, then enthusiastic clapping!
+    this.playGasp();
+
+    // Rhythmic claps from stadium fans supporting the heroic save
+    const clapGain = this.ctx.createGain();
+    clapGain.gain.setValueAtTime(0, now);
+    clapGain.gain.linearRampToValueAtTime(0.26, now + 0.2); // clap starts after initial slap gasp
+    clapGain.gain.exponentialRampToValueAtTime(0.001, now + 2.3);
+    clapGain.connect(this.ctx.destination);
+
+    for (let i = 0; i < 14; i++) {
+      const clapTime = now + 0.22 + i * 0.15 + Math.random() * 0.024;
+      const clapOsc = this.ctx.createOscillator();
+      const clapFilter = this.ctx.createBiquadFilter();
+      const clapEnv = this.ctx.createGain();
+
+      clapOsc.type = 'triangle';
+      clapOsc.frequency.setValueAtTime(190 + Math.random() * 95, clapTime);
+
+      clapFilter.type = 'bandpass';
+      clapFilter.frequency.setValueAtTime(980 + Math.random() * 210, clapTime);
+      clapFilter.Q.setValueAtTime(2.2, clapTime);
+
+      clapEnv.gain.setValueAtTime(0.14, clapTime);
+      clapEnv.gain.exponentialRampToValueAtTime(0.001, clapTime + 0.04);
+
+      clapOsc.connect(clapFilter);
+      clapFilter.connect(clapEnv);
+      clapEnv.connect(clapGain);
+
+      clapOsc.start(clapTime);
+      clapOsc.stop(clapTime + 0.05);
+    }
   }
 
   public playWoodwork() {

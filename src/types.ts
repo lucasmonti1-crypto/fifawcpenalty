@@ -177,3 +177,22 @@ export const TEAMS: Team[] = [
     }
   }
 ];
+
+export interface Goalkeeper {
+  name: string;
+  reflejos: number;
+  alcance: number;
+}
+
+export const GOALKEEPER_REGISTRY: Record<string, Goalkeeper> = {
+  ARG: { name: 'Emiliano Martínez', reflejos: 92, alcance: 91 },
+  FRA: { name: 'Mike Maignan', reflejos: 91, alcance: 90 },
+  BRA: { name: 'Alisson Becker', reflejos: 90, alcance: 92 },
+  POR: { name: 'Diogo Costa', reflejos: 89, alcance: 90 },
+  ESP: { name: 'Unai Simón', reflejos: 89, alcance: 88 },
+  GER: { name: 'Marc-André ter Stegen', reflejos: 91, alcance: 89 },
+  ENG: { name: 'Jordan Pickford', reflejos: 90, alcance: 86 },
+  NED: { name: 'Bart Verbruggen', reflejos: 88, alcance: 89 },
+  URU: { name: 'Sergio Rochet', reflejos: 88, alcance: 90 },
+  CRO: { name: 'Dominik Livaković', reflejos: 91, alcance: 89 }
+};

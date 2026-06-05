@@ -1,7 +1,8 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Team, GameState, ShotDirection, ShotHeight, ShotResult } from '../types';
+import { Team, GameState, ShotDirection, ShotHeight, ShotResult, GOALKEEPER_REGISTRY } from '../types';
 import { audioEngine } from './AudioEngine';
 import { Volume2, VolumeX, ArrowLeft, Trophy, RotateCcw, Gamepad2, Info, XCircle } from 'lucide-react';
+import { FlagBadge } from './FlagBadge';
 
 interface StadiumCanvasProps {
   playerTeam: Team;
@@ -95,6 +96,7 @@ export default function StadiumCanvas({
     power,
     curve,
     shotCount,
+    onShotComplete,
     
     // Opponent shootout parameters
     opponentScore,
@@ -171,7 +173,8 @@ export default function StadiumCanvas({
     stateRef.current.isOpponentTurn = isOpponentTurn;
     stateRef.current.opponentScore = opponentScore;
     stateRef.current.opponentHistory = opponentHistory;
-  }, [gameState, playerTeam, opponentTeam, direction, height, power, curve, shotCount, isOpponentTurn, opponentScore, opponentHistory]);
+    stateRef.current.onShotComplete = onShotComplete;
+  }, [gameState, playerTeam, opponentTeam, direction, height, power, curve, shotCount, isOpponentTurn, opponentScore, opponentHistory, onShotComplete]);
 
   // Synchronize interactiveTarget coordinates back to stateRef
   useEffect(() => {
@@ -239,6 +242,7 @@ export default function StadiumCanvas({
   // Automated 3-Click locking action
   const handleImmersiveAction = () => {
     if (gameState !== 'PRE_SHOT') return;
+    if (isOpponentTurn) return; // Prevent user shooting/target-locking when playing as goalie defending opponent hits!
 
     audioEngine.playKick(0.25); // pleasant sound effect feedback on lock clicks!
 
@@ -280,6 +284,7 @@ export default function StadiumCanvas({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (gameState !== 'PRE_SHOT') return;
+      if (isOpponentTurn) return; // Prevent target lock keystrokes when playing as Goalkeeper
       if (e.code === 'Space') {
         e.preventDefault();
         handleImmersiveAction();
@@ -287,7 +292,7 @@ export default function StadiumCanvas({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [gameState, curve, onShoot]);
+  }, [gameState, curve, onShoot, isOpponentTurn]);
 
   const handleKeeperDiveChoice = (dir: ShotDirection) => {
     if (gameState !== 'PRE_SHOT') return;
@@ -421,7 +426,7 @@ export default function StadiumCanvas({
       state.crowdTimer += 0.04;
 
       // Clear Canvas
-      ctx.fillStyle = '#064e3b'; // Fallback solid green stadium lawn
+      ctx.fillStyle = '#14532d'; // Matching Grass stripe (dark green) instead of dark green empty fallback
       ctx.fillRect(0, 0, dimensions.width, dimensions.height);
 
       // Handle Camera movement logic smoothly
@@ -587,16 +592,16 @@ export default function StadiumCanvas({
       }
       ctx.restore();
 
-      // 2. RENDER GRASS TEXTURED FIELD WITH PERSPECTIVE STRIPES
+      // 2. RENDER GRASS TEXTURED FIELD WITH PERSPECTIVE STRIPES (Seamless coverage behind camera)
       ctx.save();
-      const numStripes = 16;
+      const numStripes = 20;
       for (let s = 0; s < numStripes; s++) {
         // alternating green shades
         const stripeColor = s % 2 === 0 ? '#14532d' : '#15803d'; // alternating dark and light grass
         ctx.fillStyle = stripeColor;
 
-        const zNear = -15 + s * 1.1;
-        const zFar = zNear + 1.1;
+        const zNear = -26 + s * 1.6; // Starts deep behind the camera at -26 to avoid any bottom dark space
+        const zFar = zNear + 1.6;
 
         // Strip vertices
         const pL1 = project(-30, 0, zNear, state.screenShake);
@@ -615,7 +620,7 @@ export default function StadiumCanvas({
         }
       }
 
-      // Render realistic sponsor hoardings / fence boards in 3D behind the goal at Z=1.6
+      // Render realistic sponsor hoardings / fence boards in 3D behind the goal at Z=1.6 (TALLER & LARGER)
       const sponsorBoards = [
         { xStart: -20, xEnd: -15, bgColor: '#0f172a', textColor: '#ffffff', brand: 'adidas' },
         { xStart: -15, xEnd: -10, bgColor: '#991b1b', textColor: '#ffffff', brand: 'Coca-Cola' },
@@ -629,8 +634,8 @@ export default function StadiumCanvas({
 
       sponsorBoards.forEach(sb => {
         const pBL = project(sb.xStart, 0, 1.6, state.screenShake);
-        const pTL = project(sb.xStart, 0.95, 1.6, state.screenShake);
-        const pTR = project(sb.xEnd, 0.95, 1.6, state.screenShake);
+        const pTL = project(sb.xStart, 1.45, 1.6, state.screenShake); // Height increased to 1.45m for realistic tall hoarding boards
+        const pTR = project(sb.xEnd, 1.45, 1.6, state.screenShake);   // Height increased to 1.45m
         const pBR = project(sb.xEnd, 0, 1.6, state.screenShake);
 
         if (pBL.ok && pTL.ok && pTR.ok && pBR.ok) {
@@ -659,7 +664,7 @@ export default function StadiumCanvas({
           // Text branding in perspective
           const midX = (pTL.x + pTR.x + pBL.x + pBR.x) / 4;
           const midY = (pTL.y + pTR.y + pBL.y + pBR.y) / 4;
-          const labelSize = Math.max(7, Math.round(pTL.scale * 0.12));
+          const labelSize = Math.max(9, Math.round(pTL.scale * 0.24)); // Increased label size significantly for prominent sponsors
 
           ctx.fillStyle = sb.textColor;
           ctx.font = `black italic ${labelSize}px sans-serif`;
@@ -935,7 +940,7 @@ export default function StadiumCanvas({
           
           // Smooth diagonal approach from left to clear goalkeeper line of sight
           const progress = (pK.z - (-6.7)) / (-5.95 - (-6.7));
-          pK.x = -1.2 + Math.min(1.0, Math.max(0, progress)) * (1.2 - 0.15); // approaches ball diagonally
+          pK.x = -2.3 + Math.min(1.0, Math.max(0, progress)) * (2.3 - 0.15); // approaches ball diagonally from far left
           
           pK.rightLegAngle = Math.sin(pK.frame * 0.4) * 0.55;
           pK.leftLegAngle = -Math.sin(pK.frame * 0.4) * 0.55;
@@ -990,8 +995,13 @@ export default function StadiumCanvas({
                finalDestY = exactY + randomAngleY * 2.0 + powerOverload;
 
                const flightTicks = Math.round(5.5 / velocityZ);
-               state.ball.vx = (finalDestX - state.ball.x) / flightTicks;
-               state.ball.vy = (finalDestY - state.ball.y) / flightTicks + 0.038; 
+               const horizontalAirDrift = state.curve * 0.0022;
+               const totalDriftX = (horizontalAirDrift * (flightTicks + 1)) / 2;
+               const realGravityTick = -0.0025;
+               const totalDriftY = (realGravityTick * (flightTicks + 1)) / 2;
+
+               state.ball.vx = (finalDestX - state.ball.x) / flightTicks - totalDriftX;
+               state.ball.vy = (finalDestY - state.ball.y) / flightTicks - totalDriftY;
                state.ball.vz = velocityZ;
 
                // Spin velocities
@@ -1058,8 +1068,13 @@ export default function StadiumCanvas({
                finalDestY = exactY + randomAngleY * 1.8;
 
                const flightTicks = Math.round(5.5 / velocityZ);
-               state.ball.vx = (finalDestX - state.ball.x) / flightTicks;
-               state.ball.vy = (finalDestY - state.ball.y) / flightTicks + 0.038;
+               const horizontalAirDrift = aiCurve * 0.0022; // subtle continuous lateral slice
+               const totalDriftX = (horizontalAirDrift * (flightTicks + 1)) / 2;
+               state.ball.vx = (finalDestX - state.ball.x) / flightTicks - totalDriftX;
+               
+               const realGravityTick = -0.0025;
+               const totalDriftY = (realGravityTick * (flightTicks + 1)) / 2;
+               state.ball.vy = (finalDestY - state.ball.y) / flightTicks - totalDriftY;
                state.ball.vz = velocityZ;
 
                state.ballSpin.x = 0.55;
@@ -1512,12 +1527,14 @@ export default function StadiumCanvas({
       });
 
       // 7. BALL UPDATE & RENDERING (PHYSICS SIMULATION Ticks)
-      if (state.gameState === 'BALL_FLIGHT') {
+      if (state.gameState === 'BALL_FLIGHT' || state.gameState === 'SAVED' || state.gameState === 'CELEBRATION' || state.gameState === 'OUT_OF_BOUNDS') {
         const b = state.ball;
         
-        // Curve bending math: Curve applies lateral air displacement over time
-        const horizontalAirDrift = state.curve * 0.0022; // subtle continuous lateral slice
-        b.vx += horizontalAirDrift;
+        // Curve bending math: Curve applies lateral air displacement over time (only during active flight)
+        if (state.gameState === 'BALL_FLIGHT') {
+          const horizontalAirDrift = state.curve * 0.0022; // subtle continuous lateral slice
+          b.vx += horizontalAirDrift;
+        }
 
         // Gravity pull down over time
         const realGravityTick = -0.0025; 
@@ -1528,14 +1545,38 @@ export default function StadiumCanvas({
         b.y += b.vy;
         b.z += b.vz;
 
+        // Bounce on the grass field after shots
+        if (b.y < 0.11 && (state.gameState === 'SAVED' || state.gameState === 'CELEBRATION' || state.gameState === 'OUT_OF_BOUNDS')) {
+          b.y = 0.11;
+          b.vy = -b.vy * 0.42; // bounce up!
+          b.vx *= 0.65; // friction
+          b.vz *= 0.65; // friction
+        }
+
         // Rotate ball based on curve
         b.rotX += state.ballSpin.x;
         b.rotY += state.ballSpin.y;
 
         // Check boundary & goal line events when passing Z = 0
-        if (b.z >= 0) {
+        if (b.z >= 0 && state.gameState === 'BALL_FLIGHT') {
           // Analyze goalie contact coordinates vs ball coordinates
-          const goalieGloveSpan = 1.25; // radius of grab
+          // Analyze goalie contact coordinates vs ball coordinates Immersive Stats Check
+          const activeTeamGK = state.isOpponentTurn ? state.playerTeam : state.opponentTeam;
+          const gkStats = GOALKEEPER_REGISTRY[activeTeamGK.id] || { name: 'Portero', reflejos: 90, alcance: 90 };
+          
+          // Base glove span. Reach and Reflexes directly scale this span!
+          let goalieGloveSpan = 1.12 + ((gkStats.alcance - 85) / 10) * 0.12 + ((gkStats.reflejos - 85) / 10) * 0.08;
+          
+          // High power shots (>87) reduce the reach sweep slightly
+          if (state.power > 87) {
+            goalieGloveSpan -= 0.08;
+          }
+          // Deep top-corner shots require premium Reach to touch
+          if (Math.abs(b.x) > 3.0 && b.y > 1.8) {
+            if (gkStats.alcance < 91) {
+              goalieGloveSpan -= 0.12;
+            }
+          }
           const distToGK = Math.sqrt(Math.pow(b.x - gK.x, 2) + Math.pow(b.y - gK.y, 2));
 
           // Post and top bar dimensions: Goals are widened [-4.5, 4.5], Y up to 2.8
@@ -1598,19 +1639,19 @@ export default function StadiumCanvas({
             if (!state.shotLogged) {
               state.shotLogged = true;
               audioEngine.playGasp();
-              onShotComplete(result);
+              state.onShotComplete(result);
             }
           } 
-          // Check Goalkeeper block / save state
-          else if (distToGK < goalieGloveSpan) {
+          // Check Goalkeeper block / save state (100% mathematically aligned and coherent with target zones)
+          else if (distToGK < goalieGloveSpan || (Math.abs(gK.targetX - b.x) < 0.52 && Math.abs(gK.targetY - b.y) < 0.52)) {
             // Save!
             audioEngine.playKick(0.35); // pop sound
             state.screenShake = 4.0;
             
-            // Deflect ball high or side
+            // Cool real physical block deflection back & down towards the turf
             b.z = -0.1;
-            b.vz = -b.vz * 0.3;
-            b.vx = (b.x - gK.x) * 0.08 + (Math.random() - 0.5) * 0.05;
+            b.vz = -0.045; // Bounce backwards towards the camera
+            b.vx = (b.x - gK.x) * 0.15 + (Math.random() - 0.5) * 0.05; // Deflect sideways away from glove
             b.vy = Math.abs(b.vy) * 0.3 + 0.06;
 
             result.isSaved = true;
@@ -1620,8 +1661,8 @@ export default function StadiumCanvas({
             state.gameState = 'SAVED';
             if (!state.shotLogged) {
               state.shotLogged = true;
-              audioEngine.playGasp();
-              onShotComplete(result);
+              audioEngine.playGKSave(); // Upgraded save thud and crowd clapping logic
+              state.onShotComplete(result);
             }
           } 
           // Check Goal state
@@ -1672,7 +1713,7 @@ export default function StadiumCanvas({
               state.shotLogged = true;
               // Whistle also blows
               audioEngine.playWhistle();
-              onShotComplete(result);
+              state.onShotComplete(result);
             }
           } 
           // Completely wide or over top
@@ -1685,7 +1726,7 @@ export default function StadiumCanvas({
             if (!state.shotLogged) {
               state.shotLogged = true;
               audioEngine.playGasp();
-              onShotComplete(result);
+              state.onShotComplete(result);
             }
           }
         }
@@ -1807,39 +1848,52 @@ export default function StadiumCanvas({
           // 2. Draw soccer ball sphere base
           ctx.beginPath();
           ctx.arc(0, 0, currentRadius, 0, Math.PI * 2);
-          const ballGrad = ctx.createRadialGradient(-currentRadius * 0.3, -currentRadius * 0.3, currentRadius * 0.1, 0, 0, currentRadius);
+          const ballGrad = ctx.createRadialGradient(-currentRadius * 0.2, -currentRadius * 0.2, currentRadius * 0.1, 0, 0, currentRadius);
           ballGrad.addColorStop(0, '#ffffff');
-          ballGrad.addColorStop(0.85, '#f8fafc');
+          ballGrad.addColorStop(0.8, '#f8fafc');
           ballGrad.addColorStop(1, '#cbd5e1');
           ctx.fillStyle = ballGrad;
           ctx.fill();
 
-          // 3. Draw soccer ball panel lines and star/pentagon patterns
-          ctx.strokeStyle = '#020617';
-          ctx.lineWidth = 1.6;
+          // 3. Draw soccer ball panel lines and star/pentagon patterns matching standard classic soccer ball
+          ctx.strokeStyle = '#0f172a';
+          ctx.lineWidth = Math.max(1, currentRadius * 0.05);
           ctx.save();
-          ctx.rotate(state.frameIndex * 0.035); // subtle continuous spin for immersion
+          ctx.rotate(state.frameIndex * 0.03); // subtle rotation
+          
+          // Draw central pentagon
+          ctx.fillStyle = '#0f172a';
+          ctx.beginPath();
+          for (let pi = 0; pi < 5; pi++) {
+            const angle = (pi * Math.PI * 2) / 5;
+            const px = Math.sin(angle) * currentRadius * 0.28;
+            const py = Math.cos(angle) * currentRadius * 0.28;
+            if (pi === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
 
-          // Draw dark panels mimicking soccer ball pentagons
-          for (let star = 0; star < 5; star++) {
-            const sAngle = (star * Math.PI * 2) / 5;
+          // Draw spokes towards outer edge
+          for (let pi = 0; pi < 5; pi++) {
+            const angle = (pi * Math.PI * 2) / 5;
+            const ix = Math.sin(angle) * currentRadius * 0.28;
+            const iy = Math.cos(angle) * currentRadius * 0.28;
+            const ox = Math.sin(angle) * currentRadius * 0.65;
+            const oy = Math.cos(angle) * currentRadius * 0.65;
+            
             ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.lineTo(Math.sin(sAngle) * currentRadius, Math.cos(sAngle) * currentRadius);
+            ctx.moveTo(ix, iy);
+            ctx.lineTo(ox, oy);
             ctx.stroke();
 
-            // Draw outer panel dots
+            // Draw outer partial pentagons centering points on perimeter
             ctx.fillStyle = '#0f172a';
             ctx.beginPath();
-            ctx.arc(Math.sin(sAngle) * currentRadius * 0.7, Math.cos(sAngle) * currentRadius * 0.7, currentRadius * 0.25, 0, Math.PI * 2);
+            ctx.arc(Math.sin(angle + Math.PI / 5) * currentRadius * 0.85, Math.cos(angle + Math.PI / 5) * currentRadius * 0.85, currentRadius * 0.25, 0, Math.PI * 2);
             ctx.fill();
           }
-
-          // Central classic panel
-          ctx.fillStyle = '#1e293b';
-          ctx.beginPath();
-          ctx.arc(0, 0, currentRadius * 0.28, 0, Math.PI * 2);
-          ctx.fill();
 
           ctx.restore();
 
@@ -1883,37 +1937,58 @@ export default function StadiumCanvas({
           ctx.translate(bProj.x, bProj.y);
         }
 
-        // Draw Soccer ball sphere
+        // Draw Soccer ball sphere (Upgraded realistic layout)
         const ballRad = bProj.scale * 0.12; 
         ctx.beginPath();
         ctx.arc(0, 0, ballRad, 0, Math.PI * 2);
-        const ballGrad = ctx.createRadialGradient(-ballRad * 0.3, -ballRad * 0.3, ballRad * 0.1, 0, 0, ballRad);
+        const ballGrad = ctx.createRadialGradient(-ballRad * 0.20, -ballRad * 0.20, ballRad * 0.1, 0, 0, ballRad);
         ballGrad.addColorStop(0, '#ffffff');
-        ballGrad.addColorStop(0.85, '#e2e8f0');
+        ballGrad.addColorStop(0.8, '#f8fafc');
         ballGrad.addColorStop(1, '#94a3b8');
         ctx.fillStyle = ballGrad;
         ctx.fill();
 
-        // Star panels (rotating according to physics rotation)
-        ctx.strokeStyle = '#020617';
-        ctx.lineWidth = Math.max(1, bProj.scale * 0.008);
+        // Star panels / hexagon pentagonal outline (rotating according to physics rotation)
+        ctx.strokeStyle = '#0f172a';
+        ctx.lineWidth = Math.max(1, bProj.scale * 0.005);
         ctx.save();
         ctx.rotate(bP.rotY);
+        const physicsOffset = bP.rotX * 0.45;
 
-        // Drawing black pentagonal lines for realism
-        for (let star = 0; star < 5; star++) {
-          const sAngle = (star * Math.PI * 2) / 5 + bP.rotX * 0.45;
+        // Draw central black pentagon
+        ctx.fillStyle = '#0f172a';
+        ctx.beginPath();
+        for (let pi = 0; pi < 5; pi++) {
+          const angle = (pi * Math.PI * 2) / 5 + physicsOffset;
+          const px = Math.sin(angle) * ballRad * 0.28;
+          const py = Math.cos(angle) * ballRad * 0.28;
+          if (pi === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // Draw lines and outer black polygons
+        for (let pi = 0; pi < 5; pi++) {
+          const angle = (pi * Math.PI * 2) / 5 + physicsOffset;
+          const ix = Math.sin(angle) * ballRad * 0.28;
+          const iy = Math.cos(angle) * ballRad * 0.28;
+          const ox = Math.sin(angle) * ballRad * 0.65;
+          const oy = Math.cos(angle) * ballRad * 0.65;
+          
           ctx.beginPath();
-          ctx.moveTo(0, 0);
-          ctx.lineTo(Math.sin(sAngle) * ballRad, Math.cos(sAngle) * ballRad);
+          ctx.moveTo(ix, iy);
+          ctx.lineTo(ox, oy);
           ctx.stroke();
 
-          // small dark stars on perimeter
-          ctx.fillStyle = '#0f171c';
+          // Outer dark shapes overlapping perimeter
+          ctx.fillStyle = '#0f172a';
           ctx.beginPath();
-          ctx.arc(Math.sin(sAngle) * ballRad * 0.72, Math.cos(sAngle) * ballRad * 0.72, ballRad * 0.28, 0, Math.PI * 2);
+          ctx.arc(Math.sin(angle + Math.PI / 5) * ballRad * 0.85, Math.cos(angle + Math.PI / 5) * ballRad * 0.85, ballRad * 0.25, 0, Math.PI * 2);
           ctx.fill();
         }
+        
         ctx.restore();
 
         // Ball highlights
@@ -2062,7 +2137,7 @@ export default function StadiumCanvas({
       // RESET Player positioning back to original spot (nearer distance)
       state.ball = { x: 0, y: 0.11, z: -5.5, vx: 0, vy: 0, vz: 0, rotX: 0, rotY: 0, scale: 1 };
       state.ballSpin = { x: 0, y: 0 };
-      state.kicker = { x: -0.9, y: 0, z: -6.7, rightLegAngle: 0, leftLegAngle: 0, frame: 0 };
+      state.kicker = { x: -2.3, y: 0, z: -6.7, rightLegAngle: 0, leftLegAngle: 0, frame: 0 };
       state.keeper.x = 0;
       state.keeper.y = 0;
       state.keeper.z = 0;
@@ -2115,6 +2190,7 @@ export default function StadiumCanvas({
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (gameState !== 'PRE_SHOT') return;
+    if (isOpponentTurn) return; // Ignore canvas click clicks when playing as Goalkeeper
     handleImmersiveAction();
   };
 
@@ -2138,126 +2214,139 @@ export default function StadiumCanvas({
         className="absolute inset-0 w-full h-full object-cover z-0 cursor-pointer"
       />
 
-      {/* 2. WORLD CUP 2026 SCOREBOARD HEADER BAR (IMMERSIVE HUD) */}
-      <div className="absolute top-4 inset-x-4 md:inset-x-8 z-20 bg-black/50 backdrop-blur-md border border-white/10 px-4 md:px-6 py-2.5 rounded-2xl flex items-center justify-between pointer-events-auto shadow-[0_8px_32px_rgba(0,0,0,0.6)] transition-all">
-        {/* Left Team Details */}
-        <div className="flex items-center gap-2">
-          <button 
-            onClick={onExitSelection} 
-            className="w-8 h-8 rounded-xl bg-white/10 border border-white/15 flex items-center justify-center text-slate-100 hover:bg-white/20 hover:text-white transition active:scale-95 cursor-pointer"
-            title="Volver"
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </button>
+      {/* 2. WORLD CUP 2026 SCOREBOARD HEADER BAR (IMMERSIVE OVERHEAD OVERLAY) */}
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center max-w-sm md:max-w-md w-[95%] transition-all select-none pointer-events-none drop-shadow-xl">
+        {/* Transparent scoreboard with no background card, details or border */}
+        <div className="flex items-start justify-center w-full gap-2 md:gap-4 px-3 py-2 bg-slate-950/70 backdrop-blur-md rounded-2xl border border-white/10 shadow-2xl pointer-events-auto">
           
-          <div className="flex flex-col">
-            <div className="flex items-center gap-1.5">
-              <span className="w-2.5 h-3.5 rounded-sm shadow-sm border border-white/20" style={{ backgroundColor: playerTeam.colors.shirt }} />
-              <span className="text-xs font-black text-white uppercase tracking-wider block">
+          {/* Left Player selection details & history */}
+          <div className="flex flex-col items-end justify-start w-2/5 gap-1.5 pt-0.5">
+            <div className="flex items-center gap-2 justify-end">
+              <span className="text-sm md:text-base font-black text-white uppercase tracking-wider block drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
                 {playerTeam.id}
               </span>
+              <FlagBadge teamId={playerTeam.id} className="w-6 h-4 md:w-7 md:h-5 rounded shadow-sm border border-white/10" />
             </div>
-            <span className="text-[9px] text-[#00FF87] font-bold block leading-none mt-0.5 select-none font-mono">
-              PATEAS: {score} G
-            </span>
-          </div>
-        </div>
-
-        {/* Center Complex Live Match Score Banner */}
-        <div className="flex flex-col items-center gap-2">
-          <div className="flex items-center gap-3 px-3.5 py-1.5 rounded-xl bg-black/40 border border-white/5 shadow-inner">
-            <span className="text-xs font-black text-[#00FF87] tracking-wider">{playerTeam.id}</span>
             
-            <div className="flex items-center gap-2 font-mono">
-              <span className="text-sm font-black text-[#00FF87] bg-[#00FF87]/20 border border-[#00FF87]/30 px-2 rounded-md shadow-sm">
-                {score}
-              </span>
-              <span className="text-xs text-white/50 font-bold">-</span>
-              <span className="text-sm font-black text-red-400 bg-red-500/20 border border-red-500/30 px-2 rounded-md shadow-sm">
-                {opponentScore}
-              </span>
-            </div>
-
-            <span className="text-xs font-black text-red-400 tracking-wider">{opponentTeam.id}</span>
-          </div>
-
-          {/* Double Parallel round history matrices */}
-          <div className="flex flex-col gap-1 items-center bg-black/20 p-1 px-2.5 rounded-lg border border-white/5">
-            {/* User row */}
+            {/* Round Indicators for Player under flag */}
             <div className="flex items-center gap-1">
-              <span className="text-[8px] font-mono font-bold text-[#00FF87] w-8 text-right mr-1 uppercase">PATEAS</span>
               {Array.from({ length: Math.max(5, shotHistory.length) }).map((_, idx) => {
                 const shot = shotHistory[idx];
                 let bgCircle = "bg-white/5 border-white/10 text-white/30";
+                let textSymbol = (idx + 1).toString();
                 if (shot) {
-                  bgCircle = shot.isGoal 
-                    ? "bg-emerald-500/80 border-emerald-400 text-white shadow-[0_0_6px_rgba(16,185,129,0.5)]" 
-                    : "bg-rose-600/80 border-rose-500 text-white";
+                  if (shot.isGoal) {
+                    bgCircle = "bg-[#00FF87] border-[#00FF87]/50 text-slate-950 font-bold shadow-[0_0_8px_rgba(0,255,135,0.65)]";
+                    textSymbol = "✓";
+                  } else {
+                    bgCircle = "bg-rose-600 border-rose-500/50 text-white font-bold shadow-[0_0_8px_rgba(244,63,94,0.45)]";
+                    textSymbol = "✗";
+                  }
                 } else if (idx === shotHistory.length && !isOpponentTurn && gameState === 'PRE_SHOT') {
-                  bgCircle = "bg-sky-500/30 border-sky-400 text-sky-200 animate-pulse";
+                  bgCircle = "bg-sky-500/20 border-sky-450 text-sky-200 animate-pulse";
                 }
                 return (
-                  <div key={idx} className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center text-[7px] font-extrabold ${bgCircle}`}>
-                    {idx + 1}
+                  <div key={idx} className={`w-3.5 h-3.5 md:w-4 md:h-4 rounded-full border flex items-center justify-center text-[8px] md:text-[9px] font-extrabold transition-all duration-200 ${bgCircle}`}>
+                    {textSymbol}
                   </div>
                 );
               })}
             </div>
+          </div>
 
-            {/* Goalkeeper row */}
+          {/* Centered Large Numeric Score HUD */}
+          <div className="flex items-center justify-center w-1/5 min-w-[70px]">
+            <div className="flex items-center gap-1 font-mono">
+              <div 
+                className="flex items-center justify-center min-w-[32px] md:min-w-[38px] text-lg md:text-xl font-black bg-black/55 px-2 py-0.5 rounded-lg border transition-colors duration-200"
+                style={{ 
+                  color: playerTeam.colors.shirt === '#ffffff' ? '#f1f5f9' : playerTeam.colors.shirt,
+                  borderColor: playerTeam.colors.shirt,
+                  textShadow: `0 0 10px ${playerTeam.colors.shirt}40`
+                }}
+              >
+                {score}
+              </div>
+              
+              <span className="text-sm md:text-base font-black text-white/75">-</span>
+              
+              <div 
+                className="flex items-center justify-center min-w-[32px] md:min-w-[38px] text-lg md:text-xl font-black bg-black/55 px-2 py-0.5 rounded-lg border transition-colors duration-200"
+                style={{ 
+                  color: opponentTeam.colors.shirt === '#ffffff' ? '#f1f5f9' : opponentTeam.colors.shirt,
+                  borderColor: opponentTeam.colors.shirt,
+                  textShadow: `0 0 10px ${opponentTeam.colors.shirt}40`
+                }}
+              >
+                {opponentScore}
+              </div>
+            </div>
+          </div>
+
+          {/* Right Opponent selection details & history */}
+          <div className="flex flex-col items-start justify-start w-2/5 gap-1.5 pt-0.5">
+            <div className="flex items-center gap-2 justify-start">
+              <FlagBadge teamId={opponentTeam.id} className="w-6 h-4 md:w-7 md:h-5 rounded shadow-sm border border-white/10" />
+              <span className="text-sm md:text-base font-black text-white uppercase tracking-wider block drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+                {opponentTeam.id}
+              </span>
+            </div>
+            
+            {/* Round Indicators for Opponent under flag */}
             <div className="flex items-center gap-1">
-              <span className="text-[8px] font-mono font-bold text-red-400 w-8 text-right mr-1 uppercase">ATAJAS</span>
               {Array.from({ length: Math.max(5, opponentHistory.length) }).map((_, idx) => {
                 const shot = opponentHistory[idx];
                 let bgCircle = "bg-white/5 border-white/10 text-white/30";
+                let textSymbol = (idx + 1).toString();
                 if (shot) {
-                  bgCircle = shot.isGoal 
-                    ? "bg-rose-600/80 border-rose-500 text-white" 
-                    : "bg-emerald-500/80 border-emerald-400 text-white shadow-[0_0_6px_rgba(16,185,129,0.5)]";
+                  if (shot.isGoal) {
+                    bgCircle = "bg-[#00FF87] border-[#00FF87]/50 text-slate-950 font-bold shadow-[0_0_8px_rgba(0,255,135,0.65)]";
+                    textSymbol = "✓";
+                  } else {
+                    bgCircle = "bg-rose-600 border-rose-500/50 text-white font-bold shadow-[0_0_8px_rgba(244,63,94,0.45)]";
+                    textSymbol = "✗";
+                  }
                 } else if (idx === opponentHistory.length && isOpponentTurn && gameState === 'PRE_SHOT') {
-                  bgCircle = "bg-sky-500/30 border-sky-400 text-sky-200 animate-pulse";
+                  bgCircle = "bg-sky-500/20 border-sky-450 text-sky-200 animate-pulse";
                 }
                 return (
-                  <div key={idx} className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center text-[7px] font-extrabold ${bgCircle}`}>
-                    {idx + 1}
+                  <div key={idx} className={`w-3.5 h-3.5 md:w-4 md:h-4 rounded-full border flex items-center justify-center text-[8px] md:text-[9px] font-extrabold transition-all duration-200 ${bgCircle}`}>
+                    {textSymbol}
                   </div>
                 );
               })}
             </div>
           </div>
-        </div>
 
-        {/* Right Team Details */}
-        <div className="flex items-center gap-3">
-          <div className="flex flex-col items-end">
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs font-black text-white uppercase tracking-wider block">
-                {opponentTeam.id}
-              </span>
-              <span className="w-2.5 h-3.5 rounded-sm shadow-sm border border-white/20" style={{ backgroundColor: opponentTeam.colors.shirt }} />
-            </div>
-            <span className="text-[9px] text-red-400 font-bold block leading-none mt-0.5 select-none font-mono">
-              ATAJAS: {opponentScore} G
-            </span>
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            <button 
-              onClick={handleMuteToggle} 
-              className="w-8 h-8 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center text-slate-300 hover:bg-white/20 hover:text-white transition active:scale-95 cursor-pointer"
-              title="Sonido"
-            >
-              {isAudioMuted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4 text-[#00E5FF]" />}
-            </button>
-            <button 
-              onClick={onResetMatch} 
-              className="w-8 h-8 rounded-xl bg-white/10 border border-white/10 flex items-center justify-center text-slate-300 hover:bg-white/20 hover:text-white transition active:scale-95 cursor-pointer"
-              title="Reiniciar"
-            >
-              <RotateCcw className="w-4 h-4" />
-            </button>
-          </div>
         </div>
+      </div>
+
+      {/* Floating Corner HUD Navigation & Audio System Triggers */}
+      <div className="absolute top-4 left-4 z-20 pointer-events-auto">
+        <button 
+          onClick={onExitSelection} 
+          className="w-10 h-10 rounded-full bg-slate-950/80 backdrop-blur-md border border-white/10 flex items-center justify-center text-slate-100 hover:bg-slate-900 hover:text-white transition active:scale-90 cursor-pointer shadow-lg"
+          title="Volver"
+        >
+          <ArrowLeft className="w-5 h-5" />
+        </button>
+      </div>
+
+      <div className="absolute top-4 right-4 z-20 pointer-events-auto flex items-center gap-2">
+        <button 
+          onClick={handleMuteToggle} 
+          className="w-10 h-10 rounded-full bg-slate-950/80 backdrop-blur-md border border-white/10 flex items-center justify-center text-slate-300 hover:bg-slate-900 hover:text-white transition active:scale-95 cursor-pointer shadow-lg"
+          title="Sonido"
+        >
+          {isAudioMuted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4 text-[#00E5FF]" />}
+        </button>
+        <button 
+          onClick={onResetMatch} 
+          className="w-10 h-10 rounded-full bg-slate-950/80 backdrop-blur-md border border-white/10 flex items-center justify-center text-slate-100 hover:bg-slate-900 hover:text-white transition active:scale-90 cursor-pointer shadow-lg"
+          title="Reiniciar"
+        >
+          <RotateCcw className="w-4 h-4" />
+        </button>
       </div>
 
       {/* 4. ACTIVE SWEEPER PRE-SHOT INSTRUCTIONS OR TACTILE CONTROLS */}
@@ -2296,32 +2385,26 @@ export default function StadiumCanvas({
               </p>
             </>
           ) : (
-            // Goalkeeper direct diving buttons (as requested)
-            <div className="bg-black/65 backdrop-blur-md border border-white/10 rounded-2xl p-3 w-full flex flex-col items-center gap-2 shadow-[0_10px_40px_rgba(0,0,0,0.8)] border-sky-500/20">
-              <span className="text-[10px] font-sans font-black tracking-widest text-sky-400 uppercase">
-                🛡️ ¡TE TOCA ATAJAR! ELIGE DIRECCIÓN 🛡️
-              </span>
-              
-              <div className="grid grid-cols-3 gap-2 w-full mt-1">
-                <button
-                  onClick={() => handleKeeperDiveChoice('left')}
-                  className="py-2 px-1 rounded-xl bg-sky-500/10 border border-sky-400/30 text-white font-sans font-black text-[10px] uppercase tracking-wide hover:bg-sky-500/25 active:scale-95 transition-all text-center cursor-pointer shadow-sm"
-                >
-                  ⬅️ VOLAR IZQ
-                </button>
-                <button
-                  onClick={() => handleKeeperDiveChoice('center')}
-                  className="py-2 px-1 rounded-xl bg-sky-500/10 border border-sky-400/30 text-white font-sans font-black text-[10px] uppercase tracking-wide hover:bg-sky-500/25 active:scale-95 transition-all text-center cursor-pointer shadow-sm"
-                >
-                  ⬇️ CENTRO
-                </button>
-                <button
-                  onClick={() => handleKeeperDiveChoice('right')}
-                  className="py-2 px-1 rounded-xl bg-sky-500/10 border border-sky-400/30 text-white font-sans font-black text-[10px] uppercase tracking-wide hover:bg-sky-500/25 active:scale-95 transition-all text-center cursor-pointer shadow-sm"
-                >
-                  VOLAR DER ➡️
-                </button>
-              </div>
+            // Goalkeeper direct diving buttons (immersive in the pitch)
+            <div className="grid grid-cols-3 gap-3 w-full mt-1.5 select-none text-center">
+              <button
+                onClick={() => handleKeeperDiveChoice('left')}
+                className="py-3 px-3 rounded-xl bg-slate-900/90 backdrop-blur-md border border-white/15 text-white font-sans font-black text-[11px] uppercase tracking-wider hover:bg-[#00E5FF]/20 hover:border-[#00E5FF]/40 active:scale-95 transition-all text-center cursor-pointer shadow-[0_4px_16px_rgba(0,0,0,0.6)] flex items-center justify-center gap-1"
+              >
+                ⬅️ VOLAR IZQ
+              </button>
+              <button
+                onClick={() => handleKeeperDiveChoice('center')}
+                className="py-3 px-3 rounded-xl bg-slate-900/90 backdrop-blur-md border border-white/15 text-white font-sans font-black text-[11px] uppercase tracking-wider hover:bg-[#00E5FF]/20 hover:border-[#00E5FF]/40 active:scale-95 transition-all text-center cursor-pointer shadow-[0_4px_16px_rgba(0,0,0,0.6)] flex items-center justify-center gap-1"
+              >
+                ⬇️ CENTRO
+              </button>
+              <button
+                onClick={() => handleKeeperDiveChoice('right')}
+                className="py-3 px-3 rounded-xl bg-slate-900/90 backdrop-blur-md border border-white/15 text-white font-sans font-black text-[11px] uppercase tracking-wider hover:bg-[#00E5FF]/20 hover:border-[#00E5FF]/40 active:scale-95 transition-all text-center cursor-pointer shadow-[0_4px_16px_rgba(0,0,0,0.6)] flex items-center justify-center gap-1"
+              >
+                VOLAR DER ➡️
+              </button>
             </div>
           )}
         </div>
@@ -2334,9 +2417,14 @@ export default function StadiumCanvas({
             <div className="flex flex-col items-center gap-1.5">
               <h1 className="text-5xl md:text-7xl font-display font-black uppercase tracking-wider drop-shadow-[0_8px_16px_rgba(0,0,0,0.95)]">
                 {gameState === 'CELEBRATION' && (
-                  <span className="bg-gradient-to-r from-[#00FF87] to-[#00E5FF] bg-clip-text text-transparent">
-                    {isOpponentTurn ? `¡GOL DE ${opponentTeam.name}! 😞` : '¡GOLAZOOO! ⚽'}
-                  </span>
+                  <>
+                    <span className="bg-gradient-to-r from-[#00FF87] to-[#00E5FF] bg-clip-text text-transparent">
+                      {isOpponentTurn ? `¡GOL DE ${opponentTeam.name}!` : '¡GOLAZOOO!'}
+                    </span>
+                    <span className="text-white ml-2 text-4xl md:text-5xl align-middle inline-block select-none filter drop-shadow">
+                      {isOpponentTurn ? '😞' : '⚽'}
+                    </span>
+                  </>
                 )}
                 {gameState === 'SAVED' && (
                   <span className="text-[#00E5FF]">
@@ -2355,21 +2443,7 @@ export default function StadiumCanvas({
                 )}
               </h1>
 
-              <div className="p-3.5 py-2.5 bg-black/60 backdrop-blur-sm border border-white/5 rounded-2xl max-w-sm flex flex-col gap-1 items-center mt-2.5">
-                <p className="text-xs font-sans font-black text-white uppercase tracking-wider text-center">
-                  {gameState === 'CELEBRATION' && (isOpponentTurn ? 'Tu arquero no pudo reaccionar a tiempo.' : '¡Definición perfecta al ángulo!')}
-                  {gameState === 'SAVED' && (isOpponentTurn ? '¡Salvaste el remate con la punta de los dedos!' : 'El portero rival adivinó la trayectoria.')}
-                  {gameState === 'OUT_OF_BOUNDS' && (isOpponentTurn ? '¡Presión total! El oponente falló el disparo.' : '¡Se fue por encima del travesaño!')}
-                  {gameState === 'MATCH_OVER' && (
-                    score > opponentScore 
-                      ? '¡GANASTE EL MUNDIAL DE PENALES! 🏆 Tu selección levanta la Copa Del Mundo.' 
-                      : '¡PERDISTE EL MUNDIAL! Quedaron eliminados en la final. ¡Vuelve a intentarlo!'
-                  )}
-                </p>
-                <div className="text-[10px] text-white/50 font-mono mt-1 font-bold">
-                  {playerTeam.name} {score} - {opponentScore} {opponentTeam.name}
-                </div>
-              </div>
+              {/* Removed black description detail card so it doesn't cover the gold trophy cup */}
             </div>
 
             <button
