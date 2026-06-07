@@ -148,6 +148,7 @@ export default function StadiumCanvas({
       scaleY: 1,
       diveProgress: 0,
       diveDelay: 0,
+      startDiveZ: -5.5,
       hairColor: '#331a00'
     },
     
@@ -542,9 +543,9 @@ export default function StadiumCanvas({
       ctx.closePath();
       ctx.fill();
 
-      // Stadium tiers highlights
-      ctx.strokeStyle = '#475569';
-      ctx.lineWidth = 2;
+      // Stadium tiers highlights - softened to blend elegantly into the stands background
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 1.0;
       for (let j = 0; j < 4; j++) {
         const ty = dimensions.height * 0.22 + (j * (bannerY - (dimensions.height * 0.22))) / 4 + frameShakeY;
         ctx.beginPath();
@@ -636,9 +637,17 @@ export default function StadiumCanvas({
         const zNear = -26 + s * 1.6; // Starts deep behind the camera at -26 to avoid any bottom dark space
         const zFar = zNear + 1.6;
 
+        // Skip drawing if the stripe is completely behind the camera clipping plane
+        if (zFar <= camera.z + 1.0) {
+          continue;
+        }
+
+        // Clamp the near coordinate to be safely in front of the camera, preventing projection failure
+        const safeNearZ = Math.max(zNear, camera.z + 1.05);
+
         // Strip vertices
-        const pL1 = project(-30, 0, zNear, state.screenShake);
-        const pR1 = project(30, 0, zNear, state.screenShake);
+        const pL1 = project(-30, 0, safeNearZ, state.screenShake);
+        const pR1 = project(30, 0, safeNearZ, state.screenShake);
         const pL2 = project(-30, 0, zFar, state.screenShake);
         const pR2 = project(30, 0, zFar, state.screenShake);
 
@@ -652,11 +661,11 @@ export default function StadiumCanvas({
           ctx.fill();
         }
       }
+      ctx.restore();
 
       // Render a solid modern charcoal stadium barrier wall behind the goal and under the crowd
       // to cover the green space and provide a premium textured look.
       // Top points wallTL and wallTR already defined at top of render with standard 2.4m height
-      
       if (wallL.ok && wallR.ok && wallTL.ok && wallTR.ok) {
         ctx.fillStyle = '#111827'; // solid dark concrete grey/blue matching standard modern stadium structures
         ctx.beginPath();
@@ -666,20 +675,6 @@ export default function StadiumCanvas({
         ctx.lineTo(wallR.x, wallR.y);
         ctx.closePath();
         ctx.fill();
-
-        // Add sleek horizontal lines for high-tech stadium concrete architecture lines, carefully keeping them below the spectators stands
-        ctx.strokeStyle = '#1e293b';
-        ctx.lineWidth = 1.5;
-        for (let h = 1; h <= 4; h++) {
-          const wH1 = project(-100, h * 0.6, wallZ, state.screenShake);
-          const wH2 = project(100, h * 0.6, wallZ, state.screenShake);
-          if (wH1.ok && wH2.ok && wH1.y >= bannerY - 1) {
-            ctx.beginPath();
-            ctx.moveTo(wH1.x, wH1.y);
-            ctx.lineTo(wH2.x, wH2.y);
-            ctx.stroke();
-          }
-        }
       }
 
       // Render realistic sponsor hoardings / fence boards in 3D behind the goal at Z=1.6
@@ -1053,7 +1048,7 @@ export default function StadiumCanvas({
                const perfectMult = (finalPower >= 72 && finalPower <= 86) ? 1.0 : 0.82;
                
                // Slower Z-velocity to scale down flight speed, making it highly cinematic and realistic ("que no viaje tan rapido")
-               velocityZ = (0.075 + (finalPower / 100) * 0.065 * perfectMult) * 0.75;
+               velocityZ = 0.045 + (finalPower / 100) * 0.11 * perfectMult;
 
                // Use exact targeted analog coordinate (the user aimed exactly here!)
                const exactX = state.aimTarget ? state.aimTarget.x : 0;
@@ -1185,13 +1180,16 @@ export default function StadiumCanvas({
                  }
                  state.keeper.targetY = keeperHeightLoc === 'high' ? 1.7 : 0.45;
                }
+               // Dynamic trigger computation for realistic timing coherence with shot duration
+               state.keeper.startDiveZ = -5.5 + state.keeper.diveDelay * velocityZ;
                state.keeper.diveProgress = 0;
 
              } else {
                // OPPONENT KICKS (User is goalkeeper!)
                finalDestX = state.finalDestX;
                finalDestY = state.finalDestY;
-               velocityZ = (0.075 + (state.aiPower / 100) * 0.065) * 0.75;
+               // Wide range visual speed calculation for great tactile response and complete balance with user shots
+               velocityZ = 0.045 + (state.aiPower / 100) * 0.11;
 
                const flightTicks = Math.round(5.5 / velocityZ);
                const horizontalAirDrift = state.aiCurve * 0.0003;
@@ -1231,7 +1229,8 @@ export default function StadiumCanvas({
                  }
                  stateRef.current.opponentShotSaved = false;
                }
-               state.keeper.diveDelay = 6; 
+               state.keeper.diveDelay = Math.min(6, flightTicks - 12);
+               state.keeper.startDiveZ = -5.5 + state.keeper.diveDelay * velocityZ;
                state.keeper.diveProgress = 0;
              }
 
@@ -1525,14 +1524,25 @@ export default function StadiumCanvas({
           gK.angle = 0;
           gK.scaleY = 1.0;
         } else {
-          // Calculate physics flight progress from ball's real Z coordinate (-5.5 start)
-          const progressZ = (state.ball.z - (-5.5)) / (0 - (-5.5));
-          const t = Math.min(1.0, Math.max(0.0, progressZ));
+          // Calculate physical dive progress dynamically locked to the ball's real 3D depth relative to startDiveZ
+          const sZ = gK.startDiveZ !== undefined ? gK.startDiveZ : -5.5;
+          let t = 0;
+          if (state.ball.z >= sZ) {
+            t = (state.ball.z - sZ) / (0 - sZ);
+          }
+          t = Math.min(1.0, Math.max(0.0, t));
+          
+          // Hold full posture on saves/goals to avoid any physical rewind jitter or backward rubber-banding
+          if (state.gameState === 'SAVED' || state.gameState === 'CELEBRATION') {
+            t = 1.0;
+          } else {
+            t = Math.max(gK.diveProgress || 0, t);
+          }
           
           gK.diveProgress = t;
           
-          // Beautiful fast cubic ease-out curve for reactive dive
-          const easeT = 1 - Math.pow(1 - t, 3);
+          // Ultra-smooth, elegant composite blend easing curve that keeps dives in complete athletic speed coherence with the ball
+          const easeT = 0.3 * t + 0.7 * (1 - Math.pow(1 - t, 2.2));
           
           const sX = gK.startX !== undefined ? gK.startX : 0;
           const sY = gK.startY !== undefined ? gK.startY : 0;
@@ -2729,83 +2739,58 @@ export default function StadiumCanvas({
       {gameState !== 'PRE_SHOT' && gameState !== 'RUN_UP' && gameState !== 'KICK' && (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-transparent pointer-events-auto p-6 select-none animate-fade-in">
           {gameState === 'MATCH_OVER' ? (
-            <div className="text-center flex flex-col items-center gap-6 md:gap-7 select-none animate-scale-up max-w-2xl px-4 filter drop-shadow-[0_4px_16px_rgba(0,0,0,0.95)]">
+            <div className="flex flex-col items-center justify-center gap-6 select-none animate-scale-up max-w-sm w-full filter drop-shadow-[0_4px_16px_rgba(0,0,0,0.95)]">
               {score > opponentScore ? (
-                // CHAMPION COPA GOLDEN TROPHY - Completely transparent and deeply immersive
-                <div className="relative flex flex-col items-center gap-3">
-                  <div className="w-24 h-24 text-yellow-400 animate-bounce flex items-center justify-center filter drop-shadow-[0_0_25px_rgba(250,204,21,0.85)]">
-                    <svg viewBox="0 0 24 24" fill="currentColor" className="w-20 h-20">
-                      <path d="M18 2H6a1 1 0 00-1 1v3c0 2.2 1.8 4 4 4h1v2.1c-2.3.4-4 2.4-4 4.9H4a1 1 0 00-1 1v2a1 1 0 001 1h16a1 1 0 001-1v-2a1 1 0 00-1-1h-1c0-2.5-1.7-4.5-4-4.9V10h1c2.2 0 4-1.8 4-4V3a1 1 0 00-1-1zM7 6V4h4v2H7zm10 0h-4V4h4v2z" />
-                    </svg>
+                // CHAMPION CONCISE VIEW
+                <div className="flex flex-col items-center gap-4 bg-black/75 backdrop-blur-md border border-white/10 p-8 rounded-3xl w-full text-center shadow-2xl relative overflow-hidden">
+                  <div className="w-12 h-12 bg-yellow-500/10 border border-yellow-500/30 rounded-full flex items-center justify-center text-yellow-400">
+                    <Trophy className="w-6 h-6 animate-pulse" />
                   </div>
-                  <span className="text-[10px] md:text-xs font-mono font-black tracking-widest text-yellow-400 uppercase bg-yellow-500/15 border border-yellow-500/30 px-4 py-1 rounded-full animate-pulse">
-                    ⭐ ¡GANAS LA COPA MUNDIAL! ⭐
-                  </span>
-                  <h2 className="text-4xl md:text-7xl font-display font-black text-white mt-1 tracking-wider drop-shadow-[0_4px_12px_rgba(0,0,0,0.95)] bg-gradient-to-r from-yellow-300 via-white to-yellow-300 bg-clip-text text-transparent">
-                    ¡CAMPEÓN DEL MUNDO!
-                  </h2>
-                  <p className="text-[12px] md:text-sm text-slate-200 leading-relaxed max-w-md font-semibold drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
-                    Has coronado a <strong className="text-yellow-400">{playerTeam.name.toUpperCase()}</strong> como el rey absoluto de la Copa del Mundo 2026. ¡Una actuación legendaria!
-                  </p>
+                  <div>
+                    <span className="text-[10px] font-mono font-black tracking-widest text-yellow-400 uppercase bg-yellow-500/10 border border-yellow-500/20 px-3 py-1 rounded-full">
+                      ¡GANAS LA COPA MUNDIAL!
+                    </span>
+                    <h2 className="text-3xl font-display font-black text-white mt-3 tracking-wide uppercase">
+                      ¡CAMPEÓN DEL MUNDO!
+                    </h2>
+                    <p className="text-xs text-slate-300 leading-relaxed mt-2.5 px-2 font-medium">
+                      Has coronado a <strong className="text-yellow-400 font-extrabold">{playerTeam.name.toUpperCase()}</strong> como el rey absoluto. ¡Una actuación legendaria!
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={onExitSelection}
+                    className="mt-4 w-full py-3.5 px-6 bg-gradient-to-r from-[#1e3a8a] to-[#00E5FF] hover:from-[#111827] hover:to-[#00FF87] text-white transition-all duration-300 font-display font-black text-xs uppercase tracking-widest rounded-full shadow-[0_4px_16px_rgba(0,229,255,0.3)] hover:shadow-[0_4px_28px_rgba(0,255,135,0.4)] active:scale-95 flex items-center justify-center gap-2 cursor-pointer font-extrabold border border-white/10"
+                  >
+                    <RotateCcw className="w-4 h-4 text-white" /> JUGAR OTRA VEZ
+                  </button>
                 </div>
               ) : (
-                // DEFEAT DIGNIFIED SYSTEM
-                <div className="relative flex flex-col items-center gap-3">
-                  <div className="w-24 h-24 text-slate-400 flex items-center justify-center filter drop-shadow-[0_0_15px_rgba(148,163,184,0.4)]">
-                    <svg viewBox="0 0 24 24" fill="currentColor" className="w-18 h-18">
-                      <path d="M12 2A10 10 0 1022 12 10 10 0 0012 2zm1 14h-2v-2h2v2zm0-4h-2V7h2v5z" />
-                    </svg>
+                // DEFEAT CONCISE VIEW
+                <div className="flex flex-col items-center gap-4 bg-black/75 backdrop-blur-md border border-white/10 p-8 rounded-3xl w-full text-center shadow-2xl relative overflow-hidden">
+                  <div className="w-12 h-12 bg-rose-500/10 border border-rose-500/30 rounded-full flex items-center justify-center text-rose-400">
+                    <Info className="w-6 h-6" />
                   </div>
-                  <span className="text-[10px] md:text-xs font-mono font-black tracking-widest text-rose-400 bg-rose-950/20 border border-rose-800/40 px-4 py-1 rounded-full uppercase">
-                    🏆 FIN DE LA AVENTURA 🏆
-                  </span>
-                  <h2 className="text-4xl md:text-7xl font-display font-black text-slate-100 mt-1 tracking-wider drop-shadow-[0_4px_12px_rgba(0,0,0,0.95)]">
-                    FINN DEL TORNEO
-                  </h2>
-                  <p className="text-[12px] md:text-sm text-slate-300 leading-relaxed max-w-md font-semibold drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
-                    <strong className="text-white">{playerTeam.name.toUpperCase()}</strong> dio pelea hasta la última instancia pero cayó ante <strong className="text-white">{opponentTeam.name.toUpperCase()}</strong>.
-                  </p>
+                  <div>
+                    <span className="text-[10px] font-mono font-black tracking-widest text-rose-400 bg-rose-950/20 border border-rose-800/40 px-3 py-1 rounded-full uppercase">
+                      FIN DEL TORNEO
+                    </span>
+                    <h2 className="text-3xl font-display font-black text-slate-100 mt-3 tracking-wide uppercase">
+                      FIN DE LA AVENTURA
+                    </h2>
+                    <p className="text-xs text-slate-300 leading-relaxed mt-2.5 px-2 font-medium">
+                      <strong className="text-white font-extrabold">{playerTeam.name.toUpperCase()}</strong> dio pelea hasta la última instancia pero cayó ante <strong className="text-white font-extrabold">{opponentTeam.name.toUpperCase()}</strong>.
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={onExitSelection}
+                    className="mt-4 w-full py-3.5 px-6 bg-gradient-to-r from-[#1e3a8a] to-[#00E5FF] hover:from-[#111827] hover:to-[#00FF87] text-white transition-all duration-300 font-display font-black text-xs uppercase tracking-widest rounded-full shadow-[0_4px_16px_rgba(0,229,255,0.3)] hover:shadow-[0_4px_28px_rgba(0,255,135,0.4)] active:scale-95 flex items-center justify-center gap-2 cursor-pointer font-extrabold border border-white/10"
+                  >
+                    <RotateCcw className="w-4 h-4 text-white" /> INTENTAR DE NUEVO
+                  </button>
                 </div>
               )}
-
-              {/* IMMERSIVE SCOREBOARD COMPARISON (pure typography overlaid without rigid card backgrounds) */}
-              <div className="flex flex-col items-center gap-3 mt-3 w-full">
-                <div className="flex items-center justify-center gap-5 md:gap-8 text-2xl md:text-5xl font-display font-black text-white tracking-wider drop-shadow-[0_4px_12px_rgba(0,0,0,0.95)]">
-                  <div className="flex items-center gap-2.5">
-                    <FlagBadge teamId={playerTeam.id} className="w-8 h-5.5 md:w-16 md:h-10 rounded border border-white/20 shadow-2xl" />
-                    <span>{playerTeam.id}</span>
-                  </div>
-                  
-                  <span className="text-3xl md:text-6xl font-extrabold text-[#00FF87] bg-black/45 border border-white/10 px-5 py-2.5 rounded-2xl shadow-2xl min-w-[120px] md:min-w-[170px] text-center inline-block">
-                    {score} - {opponentScore}
-                  </span>
-                  
-                  <div className="flex items-center gap-2.5">
-                    <span>{opponentTeam.id}</span>
-                    <FlagBadge teamId={opponentTeam.id} className="w-8 h-5.5 md:w-16 md:h-10 rounded border border-white/20 shadow-2xl" />
-                  </div>
-                </div>
-
-                {/* Minimal dynamic match progress round lights */}
-                <div className="flex items-center gap-4 mt-2 px-4 py-2 bg-black/40 border border-white/5 rounded-full text-xs font-mono font-bold tracking-wider text-slate-200 backdrop-blur-md shadow-lg">
-                  <span className="flex items-center gap-1.5">
-                    <FlagBadge teamId={playerTeam.id} className="w-4 h-2.5 rounded-sm" /> 
-                    {shotHistory.map(h => h.isGoal ? "🟢" : "🔴").join(" ")}
-                  </span>
-                  <span className="text-slate-600">|</span>
-                  <span className="flex items-center gap-1.5">
-                    {opponentHistory.map(h => h.isGoal ? "🟢" : "🔴").join(" ")} 
-                    <FlagBadge teamId={opponentTeam.id} className="w-4 h-2.5 rounded-sm" />
-                  </span>
-                </div>
-              </div>
-
-              <button
-                onClick={onExitSelection}
-                className="mt-6 py-4 px-12 bg-gradient-to-r from-[#1e3a8a] to-[#00E5FF] text-white transition-all duration-200 font-display font-black text-xs md:text-sm uppercase tracking-widest rounded-full shadow-[0_4px_30px_rgba(0,229,255,0.45)] hover:shadow-[0_4px_45px_rgba(0,229,255,0.65)] active:scale-95 flex items-center justify-center gap-2 cursor-pointer font-extrabold border border-white/15"
-              >
-                <RotateCcw className="w-4.5 h-4.5 text-white" /> VOLVER A JUGAR / SELECCIONAR PAÍS
-              </button>
             </div>
           ) : (
             <div className="text-center flex flex-col items-center gap-6 animate-scale-up">
