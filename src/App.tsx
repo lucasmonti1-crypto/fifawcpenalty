@@ -48,6 +48,28 @@ export default function App() {
     };
   }, [score, opponentScore, shotHistory, opponentHistory, currentShotNum, isOpponentTurn]);
 
+  // Loop intro music on team select screen, and stop on kickoff
+  useEffect(() => {
+    if (gameState === 'TEAM_SELECT') {
+      audioEngine.init();
+      audioEngine.playIntroMusic();
+    } else {
+      audioEngine.stopMusic();
+    }
+  }, [gameState]);
+
+  // Play epic celebratory or tragic defeat music on match completion
+  useEffect(() => {
+    if (gameState === 'MATCH_OVER') {
+      const userWon = score > opponentScore;
+      if (userWon) {
+        audioEngine.playVictoryMusic();
+      } else {
+        audioEngine.playDefeatMusic();
+      }
+    }
+  }, [gameState, score, opponentScore]);
+
   // Initialize and unlock audio context upon first meaningful user screen gesture
   const handleTeamSelected = (yourTeam: Team, defenderTeam: Team) => {
     setPlayerTeam(yourTeam);
@@ -171,7 +193,7 @@ export default function App() {
     }
   };
 
-  const handleResetMatch = () => {
+  const handleNextTurn = () => {
     if (gameState === 'MATCH_OVER') {
       // Return to team select to start fully over
       setGameState('TEAM_SELECT');
@@ -191,6 +213,23 @@ export default function App() {
       setCurrentShotNum(nextRound);
       setGameState('PRE_SHOT');
     }
+  };
+
+  const handleRestartMatch = () => {
+    // Reset all gameplay variables to fully start the penalty shootout from scratch!
+    setScore(0);
+    setOpponentScore(0);
+    setShotHistory([]);
+    setOpponentHistory([]);
+    setCurrentShotNum(1);
+    setIsOpponentTurn(false);
+    
+    // Play kickoff whistle
+    audioEngine.init();
+    audioEngine.playWhistle();
+    
+    // Set state back to kickoff
+    setGameState('PRE_SHOT');
   };
 
   const handleExitSelection = () => {
@@ -250,7 +289,8 @@ export default function App() {
               isOpponentTurn={isOpponentTurn}
               shotHistory={shotHistory}
               opponentHistory={opponentHistory}
-              onResetMatch={handleResetMatch}
+              onResetMatch={handleNextTurn}
+              onRestartMatch={handleRestartMatch}
               onExitSelection={handleExitSelection}
             />
           </div>

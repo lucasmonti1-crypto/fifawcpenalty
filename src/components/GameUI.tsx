@@ -242,9 +242,9 @@ export default function GameUI({
           <h2 className="text-2xl font-black text-white tracking-tight">
             {gameState === 'KICK' && 'RUN-UP START!'}
             {gameState === 'BALL_FLIGHT' && 'SHOT FIRED! BALL IN THE AIR...'}
-            {gameState === 'CELEBRATION' && '⚽ GOOOOALLLL!!! IMPACT NET SWISH!'}
-            {gameState === 'SAVED' && (shotHistory[shotHistory.length - 1]?.hitWoodwork ? '💥 HIT THE FRAME! WOODWORK CLANG!' : '🛡️ SPECTACULAR KEEPER SAVE!')}
-            {gameState === 'OUT_OF_BOUNDS' && '⚠️ BALL SAILS COMPLETELY OFF TARGET!'}
+            {gameState === 'CELEBRATION' && 'GOOOOALLLL!!! IMPACT NET SWISH!'}
+            {gameState === 'SAVED' && (shotHistory[shotHistory.length - 1]?.hitWoodwork ? 'HIT THE FRAME! WOODWORK CLANG!' : 'SPECTACULAR KEEPER SAVE!')}
+            {gameState === 'OUT_OF_BOUNDS' && 'BALL SAILS COMPLETELY OFF TARGET!'}
           </h2>
           <p className="text-slate-400 text-xs mt-1.5 italic">
             {shotHistory[shotHistory.length - 1]?.message || 'Keep eyes glued to the trajectory path.'}
@@ -445,11 +445,11 @@ export default function GameUI({
                 <p className="text-xs text-slate-400 mt-2 font-mono">GOALS RECORDED</p>
                 
                 <p className="text-xs text-slate-500 mt-4 italic font-sans">
-                  {goalsCount === 5 && '👑 UNSTOPPABLE HERO! Absolute masterclass of timing!'}
-                  {goalsCount === 4 && '🔥 OUTSTANDING! Top-tier football shooting technique!'}
-                  {goalsCount === 3 && '👍 SOLID WORK! Great accuracy under penalty pressure.'}
-                  {goalsCount === 2 && '⚽ KEEP PRACTICING! Spend more time in the Sweet power zone.'}
-                  {goalsCount <= 1 && '🧤 BLOCKED OUT! Goalkeeper AI had reading hacks active.'}
+                  {goalsCount === 5 && 'UNSTOPPABLE HERO! Absolute masterclass of timing!'}
+                  {goalsCount === 4 && 'OUTSTANDING! Top-tier football shooting technique!'}
+                  {goalsCount === 3 && 'SOLID WORK! Great accuracy under penalty pressure.'}
+                  {goalsCount === 2 && 'KEEP PRACTICING! Spend more time in the Sweet power zone.'}
+                  {goalsCount <= 1 && 'BLOCKED OUT! Goalkeeper AI had reading hacks active.'}
                 </p>
               </div>
 

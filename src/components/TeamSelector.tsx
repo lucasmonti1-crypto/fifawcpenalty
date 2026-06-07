@@ -198,10 +198,10 @@ export default function TeamSelector({ onSelected }: TeamSelectorProps) {
         <button
           id="btn-start-match"
           onClick={() => onSelected(kickerTeam, keeperTeam)}
-          className="group relative px-12 py-4 rounded-full font-display font-black uppercase text-xs md:text-sm tracking-widest bg-gradient-to-r from-[#00FF87] to-[#00E5FF] text-[#002f23] shadow-xl hover:shadow-[0_0_25px_rgba(0,229,255,0.65)] transition-all duration-200 hover:scale-104 active:scale-96 cursor-pointer font-extrabold"
+          className="group relative px-12 py-4 rounded-full font-display font-black uppercase text-xs md:text-sm tracking-widest bg-gradient-to-r from-[#1e3a8a] to-[#00E5FF] text-white shadow-xl hover:shadow-[0_0_25px_rgba(0,229,255,0.45)] transition-all duration-200 hover:scale-104 active:scale-96 cursor-pointer font-extrabold"
         >
           <span className="flex items-center gap-2">
-            INICIAR PENALES <Trophy className="w-4.5 h-4.5 fill-[#002f23]" />
+            INICIAR PENALES <Trophy className="w-4.5 h-4.5 fill-white" />
           </span>
         </button>
       </div>

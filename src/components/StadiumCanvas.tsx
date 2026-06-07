@@ -29,6 +29,7 @@ interface StadiumCanvasProps {
   opponentHistory?: ShotResult[];
   onExitSelection: () => void;
   onResetMatch: () => void;
+  onRestartMatch: () => void;
 }
 
 export default function StadiumCanvas({
@@ -53,13 +54,15 @@ export default function StadiumCanvas({
   shotHistory,
   opponentHistory = [],
   onExitSelection,
-  onResetMatch
+  onResetMatch,
+  onRestartMatch
 }: StadiumCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   
   // 3-Click penalty shoot state controls
   const [aimingStep, setAimingStep] = useState<0 | 1 | 2>(0); // 0 = Direction (X), 1 = Height (Y), 2 = Power
   const [isAudioMuted, setIsAudioMuted] = useState(false);
+  const [showRestartConfirm, setShowRestartConfirm] = useState(false);
 
   // Keep a ref of aimingStep to be fully immune to stale closure bugs in fast ticks
   const aimingStepRef = useRef<0 | 1 | 2>(0);
@@ -116,6 +119,11 @@ export default function StadiumCanvas({
     lockedX: 0,
     lockedY: 1.4,
     
+    // Final destination for the target cursor
+    finalDestX: 0,
+    finalDestY: 0,
+    hasFinalDest: false,
+    
     // Exact analog trajectory target
     aimTarget: { x: 0, y: 1.4 },
     
@@ -139,6 +147,7 @@ export default function StadiumCanvas({
       angle: 0,
       scaleY: 1,
       diveProgress: 0,
+      diveDelay: 0,
       hairColor: '#331a00'
     },
     
@@ -388,6 +397,10 @@ export default function StadiumCanvas({
       { x: 15, y: 12, z: -2 },
     ];
 
+    // Real-time coherent frame-wide camera shake offsets!
+    let frameShakeX = 0;
+    let frameShakeY = 0;
+
     // Helper: Projected 3D point to 2D flat coordinates
     const project = (x: number, y: number, z: number, screenShake = 0) => {
       // Perspective formula with focal distance
@@ -407,9 +420,9 @@ export default function StadiumCanvas({
       const cx = dimensions.width / 2;
       const cy = dimensions.height * 0.58;
 
-      // Add camera shake effect to projection if active
-      const shakeX = screenShake ? (Math.random() - 0.5) * screenShake : 0;
-      const shakeY = screenShake ? (Math.random() - 0.5) * screenShake : 0;
+      // Add camera shake effect to projection if active (coherent frame-wide displacement)
+      const shakeX = screenShake ? frameShakeX : 0;
+      const shakeY = screenShake ? frameShakeY : 0;
 
       return {
         x: cx + dx * scale + shakeX,
@@ -425,8 +438,17 @@ export default function StadiumCanvas({
       state.frameIndex++;
       state.crowdTimer += 0.04;
 
+      // Calculate a single random displacement for the entire frame so all elements shake as a cohesive unit
+      if (state.screenShake > 0) {
+        frameShakeX = (Math.random() - 0.5) * state.screenShake;
+        frameShakeY = (Math.random() - 0.5) * state.screenShake;
+      } else {
+        frameShakeX = 0;
+        frameShakeY = 0;
+      }
+
       // Clear Canvas
-      ctx.fillStyle = '#14532d'; // Matching Grass stripe (dark green) instead of dark green empty fallback
+      ctx.fillStyle = '#0a0f1d'; // Deep night slate/stadium fallback to prevent bright green voids outside projection
       ctx.fillRect(0, 0, dimensions.width, dimensions.height);
 
       // Handle Camera movement logic smoothly
@@ -436,20 +458,23 @@ export default function StadiumCanvas({
         camera.y = camera.y * 0.95 + 1.2 * 0.05;
         camera.z = camera.z * 0.95 + -8.1 * 0.05;
 
+        // Pressure-based difficulty multiplier (as the shootout extends, pressure scales up speed!)
+        const pressureMultiplier = Math.min(2.5, 1.0 + (state.shotCount - 1) * 0.25);
+
         // Sweep variables update
         if (aimingStepRef.current === 0) {
           // Phase 0: Sweep X direction (-4.4 to +4.4)
-          const sweepSpeed = 0.038 + (state.shotCount - 1) * 0.005;
+          const sweepSpeed = 0.038 * pressureMultiplier;
           state.sweepX = Math.sin(state.frameIndex * sweepSpeed) * 4.4;
           state.aimTarget = { x: state.sweepX, y: 1.4 };
         } else if (aimingStepRef.current === 1) {
           // Phase 1: Sweep Y height (0.15 to 2.7)
-          const sweepSpeed = 0.048 + (state.shotCount - 1) * 0.005;
+          const sweepSpeed = 0.048 * pressureMultiplier;
           state.sweepY = 1.4 + Math.sin(state.frameIndex * sweepSpeed) * 1.35;
           state.aimTarget = { x: state.lockedX, y: state.sweepY };
         } else if (aimingStepRef.current === 2) {
           // Phase 2: Sweep Power (10 to 100)
-          const sweepSpeed = 0.16 + (state.shotCount - 1) * 0.012;
+          const sweepSpeed = 0.16 * pressureMultiplier;
           state.sweepPower = Math.round(50 + Math.sin(state.frameIndex * sweepSpeed) * 48);
 
           // Highly performant direct DOM manipulation to bypass React virtual DOM lag
@@ -496,16 +521,24 @@ export default function StadiumCanvas({
       ctx.fillStyle = skyGrad;
       ctx.fillRect(0, 0, dimensions.width, dimensions.height * 0.42);
 
+      // Define standard 2.4m tall concrete barrier wall in 3D to align crowd stands seamlessly
+      const wallZ = 1.8;
+      const wallHeight = 2.4; 
+      const wallTL = project(-100, wallHeight, wallZ, state.screenShake);
+      const wallTR = project(100, wallHeight, wallZ, state.screenShake);
+      const wallL = project(-100, 0, wallZ, state.screenShake);
+      const wallR = project(100, 0, wallZ, state.screenShake);
+
       // Render seating rows and dots representing crowd
-      const bannerY = dimensions.height * 0.41;
+      const bannerY = (wallTL.ok ? wallTL.y : dimensions.height * 0.41 + frameShakeY);
       
       // Draw crowd stands
       ctx.fillStyle = '#334155';
       ctx.beginPath();
-      ctx.moveTo(0, dimensions.height * 0.22);
-      ctx.lineTo(dimensions.width, dimensions.height * 0.22);
-      ctx.lineTo(dimensions.width, bannerY);
-      ctx.lineTo(0, bannerY);
+      ctx.moveTo(0 + frameShakeX, dimensions.height * 0.22 + frameShakeY);
+      ctx.lineTo(dimensions.width + frameShakeX, dimensions.height * 0.22 + frameShakeY);
+      ctx.lineTo(dimensions.width + frameShakeX, bannerY);
+      ctx.lineTo(0 + frameShakeX, bannerY);
       ctx.closePath();
       ctx.fill();
 
@@ -513,10 +546,10 @@ export default function StadiumCanvas({
       ctx.strokeStyle = '#475569';
       ctx.lineWidth = 2;
       for (let j = 0; j < 4; j++) {
-        const ty = dimensions.height * 0.22 + (j * (bannerY - dimensions.height * 0.22)) / 4;
+        const ty = dimensions.height * 0.22 + (j * (bannerY - (dimensions.height * 0.22))) / 4 + frameShakeY;
         ctx.beginPath();
-        ctx.moveTo(0, ty);
-        ctx.lineTo(dimensions.width, ty);
+        ctx.moveTo(0 + frameShakeX, ty);
+        ctx.lineTo(dimensions.width + frameShakeX, ty);
         ctx.stroke();
       }
 
@@ -524,7 +557,7 @@ export default function StadiumCanvas({
       const crowdScale = state.gameState === 'CELEBRATION' ? 2.5 : 0.8;
       ctx.fillStyle = '#f87171'; // crowd colors
       for (let i = 0; i < dimensions.width; i += 18) {
-        for (let j = dimensions.height * 0.23; j < bannerY; j += 12) {
+        for (let j = dimensions.height * 0.23 + frameShakeY; j < bannerY - 6; j += 12) {
           // Micro jumping vibration
           const jump = (state.gameState === 'CELEBRATION') ? Math.sin(state.crowdTimer * 6.5 + i * 0.12) * 5.0 : Math.sin(state.crowdTimer * 1.5 + i * 0.05) * 1.2;
           const rSeed = Math.sin(i * 100 + j * 50);
@@ -536,11 +569,11 @@ export default function StadiumCanvas({
           else if (rSeed > -0.6) ctx.fillStyle = '#10b981'; // Green
           else ctx.fillStyle = '#ffffff';
 
-          ctx.fillRect(i + (rSeed * 6), j + jump - 2, 4, 4);
+          ctx.fillRect(i + (rSeed * 6) + frameShakeX, j + jump - 2 + frameShakeY, 4, 4);
           
           // Small skin tone dots for heads
           ctx.fillStyle = '#fbcfe8';
-          ctx.fillRect(i + (rSeed * 6) + 1, j + jump - 5, 2, 2);
+          ctx.fillRect(i + (rSeed * 6) + 1 + frameShakeX, j + jump - 5 + frameShakeY, 2, 2);
         }
       }
 
@@ -620,17 +653,63 @@ export default function StadiumCanvas({
         }
       }
 
-      // Render realistic sponsor hoardings / fence boards in 3D behind the goal at Z=1.6 (TALLER & LARGER)
-      const sponsorBoards = [
-        { xStart: -20, xEnd: -15, bgColor: '#0f172a', textColor: '#ffffff', brand: 'adidas' },
-        { xStart: -15, xEnd: -10, bgColor: '#991b1b', textColor: '#ffffff', brand: 'Coca-Cola' },
-        { xStart: -10, xEnd: -5,  bgColor: '#1e3a8a', textColor: '#fbbf24', brand: 'VISA' },
-        { xStart: -5,  xEnd: 0,   bgColor: '#4c0519', textColor: '#ffffff', brand: 'QATAR' },
-        { xStart: 0,   xEnd: 5,   bgColor: '#065f46', textColor: '#38bdf8', brand: 'UNITED 2026' },
-        { xStart: 5,   xEnd: 10,  bgColor: '#1e293b', textColor: '#cbd5e1', brand: 'HYUNDAI' },
-        { xStart: 10,  xEnd: 15,  bgColor: '#991b1b', textColor: '#fbbf24', brand: 'McDonald’s' },
-        { xStart: 15,  xEnd: 20,  bgColor: '#0f172a', textColor: '#10b981', brand: 'FIFA' },
+      // Render a solid modern charcoal stadium barrier wall behind the goal and under the crowd
+      // to cover the green space and provide a premium textured look.
+      // Top points wallTL and wallTR already defined at top of render with standard 2.4m height
+      
+      if (wallL.ok && wallR.ok && wallTL.ok && wallTR.ok) {
+        ctx.fillStyle = '#111827'; // solid dark concrete grey/blue matching standard modern stadium structures
+        ctx.beginPath();
+        ctx.moveTo(wallL.x, wallL.y);
+        ctx.lineTo(wallTL.x, wallTL.y);
+        ctx.lineTo(wallTR.x, wallTR.y);
+        ctx.lineTo(wallR.x, wallR.y);
+        ctx.closePath();
+        ctx.fill();
+
+        // Add sleek horizontal lines for high-tech stadium concrete architecture lines, carefully keeping them below the spectators stands
+        ctx.strokeStyle = '#1e293b';
+        ctx.lineWidth = 1.5;
+        for (let h = 1; h <= 4; h++) {
+          const wH1 = project(-100, h * 0.6, wallZ, state.screenShake);
+          const wH2 = project(100, h * 0.6, wallZ, state.screenShake);
+          if (wH1.ok && wH2.ok && wH1.y >= bannerY - 1) {
+            ctx.beginPath();
+            ctx.moveTo(wH1.x, wH1.y);
+            ctx.lineTo(wH2.x, wH2.y);
+            ctx.stroke();
+          }
+        }
+      }
+
+      // Render realistic sponsor hoardings / fence boards in 3D behind the goal at Z=1.6
+      // Expanded to go from X=-90m to X=90m dynamically to ensure they never cut off on camera zoom-out
+      const brandTemplates = [
+        { brand: 'adidas', bgColor: '#0f172a', textColor: '#ffffff' },
+        { brand: 'Coca-Cola', bgColor: '#991b1b', textColor: '#ffffff' },
+        { brand: 'VISA', bgColor: '#111827', textColor: '#fbbf24' },
+        { brand: 'QATAR AIRWAYS', bgColor: '#4c0519', textColor: '#ffffff' },
+        { brand: 'UNITED 2026', bgColor: '#022c22', textColor: '#38bdf8' },
+        { brand: 'HYUNDAI', bgColor: '#1e293b', textColor: '#cbd5e1' },
+        { brand: 'McDonald’s', bgColor: '#991b1b', textColor: '#fbbf24' },
+        { brand: 'FIFA WORLD CUP', bgColor: '#0f172a', textColor: '#10b981' },
       ];
+
+      const sponsorBoards: { xStart: number; xEnd: number; bgColor: string; textColor: string; brand: string }[] = [];
+      const boardWidth = 6.0;
+      let templateIndex = 0;
+      
+      for (let x = -90; x < 90; x += boardWidth) {
+        const t = brandTemplates[templateIndex % brandTemplates.length];
+        sponsorBoards.push({
+          xStart: x,
+          xEnd: x + boardWidth - 0.05,
+          brand: t.brand,
+          bgColor: t.bgColor,
+          textColor: t.textColor
+        });
+        templateIndex++;
+      }
 
       sponsorBoards.forEach(sb => {
         const pBL = project(sb.xStart, 0, 1.6, state.screenShake);
@@ -661,10 +740,10 @@ export default function StadiumCanvas({
           ctx.lineTo(pTR.x, pTR.y);
           ctx.stroke();
 
-          // Text branding in perspective
+          // Text branding in perspective - significantly larger font sizes for extreme legibility
           const midX = (pTL.x + pTR.x + pBL.x + pBR.x) / 4;
           const midY = (pTL.y + pTR.y + pBL.y + pBR.y) / 4;
-          const labelSize = Math.max(9, Math.round(pTL.scale * 0.24)); // Increased label size significantly for prominent sponsors
+          const labelSize = Math.max(16, Math.round(pTL.scale * 0.45)); // Magnified font scale for high-visibility sponsor logos
 
           ctx.fillStyle = sb.textColor;
           ctx.font = `black italic ${labelSize}px sans-serif`;
@@ -969,35 +1048,68 @@ export default function StadiumCanvas({
              let velocityZ = 0.22;
 
              if (!state.isOpponentTurn) {
-               // USER KICKS (Normal mode)
+               // USER KICKS (Normal mode - with highly-coherent shot measurements and pressure factors)
                const finalPower = state.power;
-               const perfectMult = (finalPower >= 72 && finalPower <= 86) ? 1.01 : 0.85;
-               velocityZ = 0.15 + (finalPower / 100) * 0.16 * perfectMult; 
+               const perfectMult = (finalPower >= 72 && finalPower <= 86) ? 1.0 : 0.82;
+               
+               // Slower Z-velocity to scale down flight speed, making it highly cinematic and realistic ("que no viaje tan rapido")
+               velocityZ = (0.075 + (finalPower / 100) * 0.065 * perfectMult) * 0.75;
 
                // Use exact targeted analog coordinate (the user aimed exactly here!)
-               const exactX = state.aimTarget ? state.aimTarget.x : (state.direction === 'left' ? -2.6 : (state.direction === 'right' ? 2.6 : 0));
-               const exactY = state.aimTarget ? state.aimTarget.y : (state.height === 'high' ? 2.0 : 0.5);
+               const exactX = state.aimTarget ? state.aimTarget.x : 0;
+               const exactY = state.aimTarget ? state.aimTarget.y : 0.5;
 
-               const spinCurve = state.curve * 0.12;
+               // User Accuracy Base
+               const playerAccuracy = state.playerTeam.accuracy; // typically 75-95
+               
+               // Base error magnitude
+               let errorMagnitude = 0.03; // baseline deviation
+               
+               if (finalPower > 86) {
+                 // Excessive power -> massive ballooning upward/sideways error ("posibilidad de errar" is proportional to over-power)
+                 const excess = finalPower - 86;
+                 errorMagnitude = 0.08 + excess * 0.025;
+               } else if (finalPower < 70) {
+                 // Underpowered -> slow ball with mild drift
+                 errorMagnitude = 0.045;
+               } else {
+                 // Sweet spot! Extremely accurate, minor physical deviation depending on team accuracy
+                 errorMagnitude = (100 - playerAccuracy) * 0.001; 
+               }
 
-               // Accuracy & randomness dispersion based on team stats (much tighter for sweet spot!)
-               const playerAccuracy = state.playerTeam.accuracy;
-               const errMult = (finalPower >= 70 && finalPower <= 86) ? 0.15 : 0.45; // Sweet spot = tight precision!
-               const errLimit = Math.max(0.02, (100 - playerAccuracy) * 0.015) * errMult; 
-               const randomAngleX = (Math.random() - 0.5) * errLimit;
-               const randomAngleY = (Math.random() - 0.5) * errLimit;
+               // Additional pressure error from extreme corner aiming (closer to posts/top = higher risk of mistake)
+               const distFromCenter = Math.sqrt(exactX * exactX + exactY * exactY);
+               if (distFromCenter > 3.0) {
+                 errorMagnitude += (distFromCenter - 3.0) * 0.06;
+               }
 
-               // Over-power adds ballooning dispersion
-               const powerOverload = finalPower > 88 ? (finalPower - 86) * 0.04 : 0;
+               // Add psychological tension/pressure from shootout rounds ("cuanto mas lejos llegas mas dificil es")
+               const roundPressureFactor = Math.min(2.5, 1.0 + (state.shotCount - 1) * 0.15);
+               errorMagnitude *= roundPressureFactor;
 
-               // Final destination at Z = 0
-               finalDestX = exactX + randomAngleX * 2.5 + spinCurve * 0.45;
-               finalDestY = exactY + randomAngleY * 2.0 + powerOverload;
+               // Random deviation vectors
+               const deviationX = (Math.random() - 0.5) * errorMagnitude * 3.5;
+               const deviationY = (Math.random() - 0.5) * errorMagnitude * 2.5;
+
+               // Overpowered shots naturally fly high
+               const verticalLift = finalPower > 88 ? (finalPower - 88) * 0.09 : 0;
+
+               finalDestX = exactX + deviationX;
+               finalDestY = exactY + deviationY + verticalLift;
+
+               // Clamp coordinates to keep it realistic but possible to miss completely
+               state.finalDestX = Math.max(-6.2, Math.min(6.2, finalDestX));
+               state.finalDestY = Math.max(0.1, Math.min(4.5, finalDestY));
+               state.hasFinalDest = true;
+
+               finalDestX = state.finalDestX;
+               finalDestY = state.finalDestY;
 
                const flightTicks = Math.round(5.5 / velocityZ);
-               const horizontalAirDrift = state.curve * 0.0022;
+               const horizontalAirDrift = state.curve * 0.0003; // reduced curve scale dramatically to avoid fictitious curve guiding
                const totalDriftX = (horizontalAirDrift * (flightTicks + 1)) / 2;
-               const realGravityTick = -0.0025;
+               
+               const realGravityTick = -0.0012; // light physical gravity matched to slower velocity mapping
                const totalDriftY = (realGravityTick * (flightTicks + 1)) / 2;
 
                state.ball.vx = (finalDestX - state.ball.x) / flightTicks - totalDriftX;
@@ -1008,67 +1120,81 @@ export default function StadiumCanvas({
                state.ballSpin.x = 0.55;
                state.ballSpin.y = state.curve * 0.086;
 
-               // Computer Goalkeeper diving calculations
-               // Decide direction with biased patterns
+               // --- EXTREMELY ENHANCED COMPUTER GOALKEEPER AI DECISION ENGINE ---
+               const gkStats = GOALKEEPER_REGISTRY[state.opponentTeam.id] || { name: 'Portero', reflejos: 90, alcance: 90 };
+               const reflexes = gkStats.reflejos; // 85-99
+               const reach = gkStats.alcance;
+               
+               // Strategic strategy decision: 'anticipate' (dive early) vs 'react' (wait for kick)
+               let gkStrategy: 'anticipate' | 'react' | 'stay' = 'react';
+               const stratRandom = Math.random() * 100;
+               if (stratRandom < 22) {
+                 gkStrategy = 'anticipate'; // dives before ball leaves foot
+               } else if (stratRandom < 92) {
+                 gkStrategy = 'react'; // waits for ball path, relies on pure reflexes
+               } else {
+                 gkStrategy = 'stay'; // covers central chip shots / panenkas
+               }
+
+               // Goalkeeper diving decision mapping
                let keeperDiveDir: ShotDirection = 'center';
-               let keeperHeight: ShotHeight = 'low';
-               const rand = Math.random();
-               if (rand < 0.38) keeperDiveDir = 'left';
-               else if (rand < 0.76) keeperDiveDir = 'right';
-               else keeperDiveDir = 'center';
+               let keeperHeightLoc: ShotHeight = 'low';
 
-               keeperHeight = Math.random() < 0.5 ? 'low' : 'high';
+               if (gkStrategy === 'anticipate') {
+                 // Pre-dives early
+                 keeperDiveDir = Math.random() < 0.5 ? 'left' : 'right';
+                 keeperHeightLoc = Math.random() < 0.45 ? 'low' : 'high';
+                 state.keeper.diveDelay = 0; // starts immediately
+               } else if (gkStrategy === 'react') {
+                 // Reactive - guess chance depends directly on reflexes
+                 const diveCorrectChance = 0.4 + ((reflexes - 85) / 15) * 0.35;
+                 const ballSector: 'left' | 'right' | 'center' = finalDestX < -1.2 ? 'left' : (finalDestX > 1.2 ? 'right' : 'center');
+                 
+                 if (Math.random() < diveCorrectChance) {
+                   keeperDiveDir = ballSector;
+                 } else {
+                   keeperDiveDir = ballSector === 'left' ? 'right' : (ballSector === 'right' ? 'left' : (Math.random() < 0.5 ? 'left' : 'right'));
+                 }
+                 
+                 keeperHeightLoc = finalDestY > 1.45 ? 'high' : 'low';
+                 state.keeper.diveDelay = Math.max(3, Math.round(15 - (reflexes - 85) * 0.5)); 
+               } else {
+                 keeperDiveDir = 'center';
+                 keeperHeightLoc = finalDestY > 1.6 ? 'high' : 'low';
+                 state.keeper.diveDelay = 6;
+               }
 
-               // Record starting coordinates of goalie for smooth interpolation
+               // Record starting coordinates
                state.keeper.startX = state.keeper.x;
                state.keeper.startY = state.keeper.y;
 
-               // Goalkeeper diving decision mapping
-               const ballSector: 'left' | 'right' | 'center' = finalDestX < -1.4 ? 'left' : (finalDestX > 1.4 ? 'right' : 'center');
-               const guessedCorrectly = keeperDiveDir === ballSector;
+               const ballSectorZone: 'left' | 'right' | 'center' = finalDestX < -1.1 ? 'left' : (finalDestX > 1.1 ? 'right' : 'center');
+               const guessedCorrectly = keeperDiveDir === ballSectorZone;
 
                if (guessedCorrectly) {
                  state.keeper.targetX = Math.min(3.7, Math.max(-3.7, finalDestX));
-                 state.keeper.targetY = Math.min(2.4, Math.max(0.35, finalDestY));
+                 const maxVerticalReach = 0.35 + ((reach - 85) / 15) * 2.1;
+                 state.keeper.targetY = Math.min(maxVerticalReach, Math.max(0.35, finalDestY));
                } else {
-                 if (ballSector === 'left') {
-                   state.keeper.targetX = 3.3;
-                 } else if (ballSector === 'right') {
-                   state.keeper.targetX = -3.3;
+                 if (ballSectorZone === 'left') {
+                   state.keeper.targetX = 3.3; // dives right
+                 } else if (ballSectorZone === 'right') {
+                   state.keeper.targetX = -3.3; // dives left
                  } else {
-                   state.keeper.targetX = Math.random() < 0.5 ? -3.3 : 3.3;
+                   state.keeper.targetX = Math.random() < 0.5 ? -3.2 : 3.2;
                  }
-                 state.keeper.targetY = keeperHeight === 'high' ? 1.8 : 0.45;
+                 state.keeper.targetY = keeperHeightLoc === 'high' ? 1.7 : 0.45;
                }
                state.keeper.diveProgress = 0;
 
              } else {
                // OPPONENT KICKS (User is goalkeeper!)
-               const finalPower = stateRef.current.aiPower || 80;
-               velocityZ = 0.16 + (finalPower / 100) * 0.14;
-
-               // Retrieve the sector the computer AI shooter targeted
-               const aiDir = stateRef.current.aiShotDir || 'center';
-               const aiH = stateRef.current.aiShotHeight || 'low';
-
-               // Target coordinate
-               const exactX = aiDir === 'left' ? -2.6 : (aiDir === 'right' ? 2.6 : 0);
-               const exactY = aiH === 'high' ? 2.0 : 0.5;
-
-               const aiCurve = stateRef.current.aiCurve || 0;
-               const spinCurve = aiCurve * 0.1;
-
-               // Opponent accuracy randomness
-               const oppAccuracy = state.opponentTeam.accuracy;
-               const errLimit = Math.max(0.04, (100 - oppAccuracy) * 0.012);
-               const randomAngleX = (Math.random() - 0.5) * errLimit;
-               const randomAngleY = (Math.random() - 0.5) * errLimit;
-
-               finalDestX = exactX + randomAngleX * 2.2 + spinCurve * 0.5;
-               finalDestY = exactY + randomAngleY * 1.8;
+               finalDestX = state.finalDestX;
+               finalDestY = state.finalDestY;
+               velocityZ = (0.075 + (state.aiPower / 100) * 0.065) * 0.75;
 
                const flightTicks = Math.round(5.5 / velocityZ);
-               const horizontalAirDrift = aiCurve * 0.0022; // subtle continuous lateral slice
+               const horizontalAirDrift = state.aiCurve * 0.0003;
                const totalDriftX = (horizontalAirDrift * (flightTicks + 1)) / 2;
                state.ball.vx = (finalDestX - state.ball.x) / flightTicks - totalDriftX;
                
@@ -1078,22 +1204,21 @@ export default function StadiumCanvas({
                state.ball.vz = velocityZ;
 
                state.ballSpin.x = 0.55;
-               state.ballSpin.y = aiCurve * 0.08;
+               state.ballSpin.y = state.aiCurve * 0.082;
 
-               // User's goalkeeper starting pose and interpolation target
                state.keeper.startX = state.keeper.x;
                state.keeper.startY = state.keeper.y;
 
-               // Check if user's selected goalkeeper dive matches the AI shooter sector!
-               const userDivedCorrectly = (state.direction === aiDir);
+               const ballSectorZone: 'left' | 'right' | 'center' = finalDestX < -1.1 ? 'left' : (finalDestX > 1.1 ? 'right' : 'center');
+               const userDivedCorrectly = (state.direction === ballSectorZone);
 
                if (userDivedCorrectly) {
-                 // Elite fingertip save alignment!
                  state.keeper.targetX = Math.min(3.7, Math.max(-3.7, finalDestX));
-                 state.keeper.targetY = Math.min(2.4, Math.max(0.35, finalDestY));
+                 const userGKStat = GOALKEEPER_REGISTRY[state.playerTeam.id] || { name: 'Portero', reflejos: 90, alcance: 90 };
+                 const maxVerticalReach = 0.35 + ((userGKStat.alcance - 85) / 15) * 2.1;
+                 state.keeper.targetY = Math.min(maxVerticalReach, Math.max(0.35, finalDestY));
                  stateRef.current.opponentShotSaved = true;
                } else {
-                 // Dive the wrong way
                  if (state.direction === 'left') {
                    state.keeper.targetX = -3.2;
                    state.keeper.targetY = 0.8;
@@ -1106,6 +1231,7 @@ export default function StadiumCanvas({
                  }
                  stateRef.current.opponentShotSaved = false;
                }
+               state.keeper.diveDelay = 6; 
                state.keeper.diveProgress = 0;
              }
 
@@ -1391,29 +1517,38 @@ export default function StadiumCanvas({
       const gK = state.keeper;
       
       if (state.gameState === 'BALL_FLIGHT' || state.gameState === 'SAVED' || state.gameState === 'CELEBRATION') {
-        // Calculate physics flight progress from ball's real Z coordinate (-5.5 start)
-        const progressZ = (state.ball.z - (-5.5)) / (0 - (-5.5));
-        const t = Math.min(1.0, Math.max(0.0, progressZ));
-        
-        gK.diveProgress = t;
-        
-        // Beautiful fast cubic ease-out curve for reactive dive
-        const easeT = 1 - Math.pow(1 - t, 3);
-        
-        const sX = gK.startX !== undefined ? gK.startX : 0;
-        const sY = gK.startY !== undefined ? gK.startY : 0;
-        
-        gK.x = sX + (gK.targetX - sX) * easeT;
-        gK.y = sY + (gK.targetY - sY) * easeT;
-        
-        // Tilt rotation of diving body
-        if (gK.targetX !== 0) {
-          gK.angle = (gK.targetX > 0 ? 1 : -1) * 0.92 * easeT;
-          gK.scaleY = 0.55;
-        } else {
-          // Centered reaction
+        if (gK.diveDelay !== undefined && gK.diveDelay > 0) {
+          gK.diveDelay--;
+          // Goalkeeper remains standing alert during reaction delay frames
+          gK.x = gK.startX !== undefined ? gK.startX : 0;
+          gK.y = gK.startY !== undefined ? gK.startY : 0;
           gK.angle = 0;
-          gK.scaleY = gK.targetY > 0.8 ? 0.8 : 1.0;
+          gK.scaleY = 1.0;
+        } else {
+          // Calculate physics flight progress from ball's real Z coordinate (-5.5 start)
+          const progressZ = (state.ball.z - (-5.5)) / (0 - (-5.5));
+          const t = Math.min(1.0, Math.max(0.0, progressZ));
+          
+          gK.diveProgress = t;
+          
+          // Beautiful fast cubic ease-out curve for reactive dive
+          const easeT = 1 - Math.pow(1 - t, 3);
+          
+          const sX = gK.startX !== undefined ? gK.startX : 0;
+          const sY = gK.startY !== undefined ? gK.startY : 0;
+          
+          gK.x = sX + (gK.targetX - sX) * easeT;
+          gK.y = sY + (gK.targetY - sY) * easeT;
+          
+          // Tilt rotation of diving body
+          if (gK.targetX !== 0) {
+            gK.angle = (gK.targetX > 0 ? 1 : -1) * 0.92 * easeT;
+            gK.scaleY = 0.55;
+          } else {
+            // Centered reaction
+            gK.angle = 0;
+            gK.scaleY = gK.targetY > 0.8 ? 0.8 : 1.0;
+          }
         }
       } else {
         // Gentle breathing bounce / shuffle left-right pre-shot
@@ -1532,12 +1667,13 @@ export default function StadiumCanvas({
         
         // Curve bending math: Curve applies lateral air displacement over time (only during active flight)
         if (state.gameState === 'BALL_FLIGHT') {
-          const horizontalAirDrift = state.curve * 0.0022; // subtle continuous lateral slice
+          const currentCurve = state.isOpponentTurn ? state.aiCurve : state.curve;
+          const horizontalAirDrift = currentCurve * 0.0003; // reduced curve scale to prevent fictional guiding curves
           b.vx += horizontalAirDrift;
         }
 
-        // Gravity pull down over time
-        const realGravityTick = -0.0025; 
+        // Gravity pull down over time matching the slower velocities
+        const realGravityTick = -0.0012; 
         b.vy += realGravityTick;
 
         // Apply velocities
@@ -1642,34 +1778,104 @@ export default function StadiumCanvas({
               state.onShotComplete(result);
             }
           } 
-          // Check Goalkeeper block / save state (100% mathematically aligned and coherent with target zones)
-          else if (distToGK < goalieGloveSpan || (Math.abs(gK.targetX - b.x) < 0.52 && Math.abs(gK.targetY - b.y) < 0.52)) {
-            // Save!
-            audioEngine.playKick(0.35); // pop sound
-            state.screenShake = 4.0;
+          // Check Goalkeeper block / Save states
+          else if (distToGK < goalieGloveSpan * 0.72 || (Math.abs(gK.targetX - b.x) < 0.35 && Math.abs(gK.targetY - b.y) < 0.35)) {
+            // SOLID CLEAN SAVE!
+            audioEngine.playKick(0.38); // pop sound
+            state.screenShake = 4.5;
             
-            // Cool real physical block deflection back & down towards the turf
-            b.z = -0.1;
-            b.vz = -0.045; // Bounce backwards towards the camera
-            b.vx = (b.x - gK.x) * 0.15 + (Math.random() - 0.5) * 0.05; // Deflect sideways away from glove
-            b.vy = Math.abs(b.vy) * 0.3 + 0.06;
+            b.z = -0.12;
+            b.vz = -0.055; // Bounce backwards
+            b.vx = (b.x - gK.x) * 0.18 + (Math.random() - 0.5) * 0.05; 
+            b.vy = Math.abs(b.vy) * 0.35 + 0.08;
 
             result.isSaved = true;
             result.isGoal = false;
-            result.message = 'SUPER SAVE! Pulled out of the air!';
+            result.message = state.isOpponentTurn ? '¡INCREÍBLE ATAJADA SEGURA! El arquero contuvo el balón.' : '¡TIRO ATAJADO! El arquero contuvo el balón.';
             
             state.gameState = 'SAVED';
             if (!state.shotLogged) {
               state.shotLogged = true;
-              audioEngine.playGKSave(); // Upgraded save thud and crowd clapping logic
+              audioEngine.playGKSave(); // major clatter thud
+              if (state.isOpponentTurn) {
+                audioEngine.playCheer();
+              } else {
+                audioEngine.playBooing();
+              }
               state.onShotComplete(result);
+            }
+          } 
+          else if (distToGK < goalieGloveSpan * 1.25 || (Math.abs(gK.targetX - b.x) < 0.62 && Math.abs(gK.targetY - b.y) < 0.62)) {
+            // "ROZAR Y DESVIAR" (Fingertip graze deflection!)
+            // 50% chance they tip it out of bounds, 50% chance they touch it but it still deflects inside the net!
+            const deflectsIn = Math.random() < 0.50;
+            state.screenShake = 3.0;
+
+            if (deflectsIn) {
+              // Ball is tipped, slower velocity, slightly redirected, but still goes in (Goal)!
+              b.vx = (b.x - gK.x) * 0.08; 
+              b.vy = b.vy * 0.85;
+              b.vz = b.vz * 0.95;
+
+              result.isSaved = false;
+              result.isGoal = true;
+              result.message = state.isOpponentTurn ? '¡EL ARQUERO LA ROZÓ PERO TERMINÓ ADENTRO!' : '¡ROZÓ EL GUANTE DEL PORTERO Y ENTRÓ!';
+              
+              state.gameState = 'CELEBRATION';
+              if (!state.shotLogged) {
+                state.shotLogged = true;
+                audioEngine.playNetSwish();
+                if (state.isOpponentTurn) {
+                  audioEngine.playBooing(); // Opponent scores
+                } else {
+                  audioEngine.playCheer(); // We score
+                }
+                state.netPoints.forEach(p => {
+                  const dx = p.x - b.x;
+                  const dy = p.y - b.y;
+                  const dist = Math.sqrt(dx * dx + dy * dy);
+                  if (dist < 1.4 && p.z >= 0.0) {
+                    p.z = 1.05 + (1.4 - dist) * 0.45;
+                    p.vz = 0.12;
+                  }
+                });
+                state.onShotComplete(result);
+              }
+            } else {
+              // Big fingertip deflection OUT of play!
+              b.z = -0.1;
+              b.vz = -0.035; 
+              b.vx = (b.x - gK.x) * 0.38 + (Math.random() - 0.5) * 0.08; // robust sideways deflection outwards
+              b.vy = Math.abs(b.vy) * 0.42 + 0.1;
+
+              result.isSaved = true;
+              result.isGoal = false;
+              result.message = state.isOpponentTurn ? '¡LOGRÓ DESVIAR CON LOS DEDOS! SALVADA' : '¡PALMEO SALVADOR CON LAS UÑAS!';
+              
+              state.gameState = 'SAVED';
+              if (!state.shotLogged) {
+                state.shotLogged = true;
+                audioEngine.playGKSave(); // glove thud
+                if (state.isOpponentTurn) {
+                  audioEngine.playCheer(); // We save
+                } else {
+                  audioEngine.playBooing(); // Saved by opponent
+                }
+                state.onShotComplete(result);
+              }
             }
           } 
           // Check Goal state
           else if (isBetweenPosts && isUnderBar) {
             // GOAL!! Trigger net expansion pull and sparkles
             audioEngine.playNetSwish();
-            audioEngine.playCheer();
+            if (!state.shotLogged) {
+              if (state.isOpponentTurn) {
+                audioEngine.playBooing();
+              } else {
+                audioEngine.playCheer();
+              }
+            }
             
             state.screenShake = 11.5;
             result.isGoal = true;
@@ -1725,7 +1931,12 @@ export default function StadiumCanvas({
             state.gameState = 'OUT_OF_BOUNDS';
             if (!state.shotLogged) {
               state.shotLogged = true;
-              audioEngine.playGasp();
+              if (state.isOpponentTurn) {
+                audioEngine.playCheer(); // Opponent missed, home crowd cheers!
+              } else {
+                audioEngine.playGasp();
+                audioEngine.playBooing(); // We missed, home crowd groans!
+              }
               state.onShotComplete(result);
             }
           }
@@ -1907,6 +2118,52 @@ export default function StadiumCanvas({
           // vertical hairs
           ctx.moveTo(0, -currentRadius * 1.5); ctx.lineTo(0, -currentRadius * 1.1);
           ctx.moveTo(0, currentRadius * 1.1); ctx.lineTo(0, currentRadius * 1.5);
+          ctx.stroke();
+
+          ctx.restore();
+        }
+      }
+
+      // --- WORLD CUP 2026 TARGET ENTRY CURSOR ---
+      // Show when destination is available during player shot run up or ball flight (never on opponent turn)
+      if (state.hasFinalDest && !state.isOpponentTurn && (state.gameState === 'RUN_UP' || state.gameState === 'BALL_FLIGHT')) {
+        const destP = project(state.finalDestX, state.finalDestY, 0, state.screenShake);
+        if (destP.ok) {
+          ctx.save();
+          ctx.translate(destP.x, destP.y);
+
+          const rBase = destP.scale * 0.35; // slightly smaller and crispier
+          const timePulse = Math.sin(state.frameIndex * 0.12) * 1.0;
+          const finalR = rBase + timePulse;
+
+          // Clean, modern white target ring representing professional minimalist design
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)'; // external glow
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.arc(0, 0, finalR + 2.0, 0, Math.PI * 2);
+          ctx.stroke();
+
+          ctx.strokeStyle = '#ffffff'; // primary white container ring
+          ctx.lineWidth = 2.0;
+          ctx.beginPath();
+          ctx.arc(0, 0, finalR, 0, Math.PI * 2);
+          ctx.stroke();
+
+          // Central core target dot (pure high-contrast white)
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(0, 0, destP.scale * 0.08, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Simple elegant clean crosshair subtle lines
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)';
+          ctx.lineWidth = 1.2;
+          
+          ctx.beginPath();
+          ctx.moveTo(-finalR - 3, 0); ctx.lineTo(-finalR + 2, 0);
+          ctx.moveTo(finalR - 2, 0); ctx.lineTo(finalR + 3, 0);
+          ctx.moveTo(0, -finalR - 3); ctx.lineTo(0, -finalR + 2);
+          ctx.moveTo(0, finalR - 2); ctx.lineTo(0, finalR + 3);
           ctx.stroke();
 
           ctx.restore();
@@ -2145,13 +2402,68 @@ export default function StadiumCanvas({
       state.keeper.targetY = 0;
       state.keeper.angle = 0;
       state.keeper.diveProgress = 0;
+      state.keeper.diveDelay = 0;
       state.shotLogged = false;
       state.screenShake = 0;
       state.particles = [];
       setAimingStep(0);
       if (setPower) setPower(0);
+
+      // Pre-calculate AI kick if it is opponent's turn to shoot
+      if (isOpponentTurn) {
+        const directions: ShotDirection[] = ['left', 'center', 'right'];
+        const heights: ShotHeight[] = ['low', 'high'];
+
+        const aiSelectedDir = directions[Math.floor(Math.random() * 3)];
+        const aiSelectedHeight = heights[Math.random() < 0.65 ? 0 : 1];
+        
+        // Opponent stats-based power and curve
+        const oppPowerStat = opponentTeam.power;
+        const aiSelectedPower = Math.round(oppPowerStat - 8 + Math.random() * 16);
+        const oppCurveStat = opponentTeam.curve;
+        const aiSelectedCurve = Math.round((Math.random() - 0.5) * (oppCurveStat / 5));
+
+        state.aiShotDir = aiSelectedDir;
+        state.aiShotHeight = aiSelectedHeight;
+        state.aiPower = aiSelectedPower;
+        state.aiCurve = aiSelectedCurve;
+
+        const exactX = aiSelectedDir === 'left' ? -2.6 : (aiSelectedDir === 'right' ? 2.6 : 0);
+        const exactY = aiSelectedHeight === 'high' ? 2.0 : 0.5;
+
+        const spinCurve = aiSelectedCurve * 0.1;
+        const oppAccuracy = opponentTeam.accuracy;
+        
+        let powerErrorFactor = 0.15;
+        if (aiSelectedPower > 86) {
+          powerErrorFactor = 0.45 + (aiSelectedPower - 86) * 0.04;
+        }
+        const edgeDistanceX = 4.5 - Math.abs(exactX);
+        const edgeDistanceY = 2.8 - exactY;
+        let edgeErrorFactor = 1.0;
+        if (edgeDistanceX < 1.2) {
+          edgeErrorFactor += (1.2 - edgeDistanceX) * 0.7;
+        }
+        if (edgeDistanceY < 0.7) {
+          edgeErrorFactor += (0.7 - edgeDistanceY) * 0.9;
+        }
+
+        const errLimit = Math.max(0.04, (100 - oppAccuracy) * 0.012) * powerErrorFactor * edgeErrorFactor;
+        const randomAngleX = (Math.random() - 0.5) * errLimit * 2.8;
+        const randomAngleY = (Math.random() - 0.5) * errLimit * 2.3;
+
+        const powerOverload = aiSelectedPower > 88 ? (aiSelectedPower - 86) * 0.07 : 0;
+
+        state.finalDestX = exactX + randomAngleX + spinCurve * 0.5;
+        state.finalDestY = exactY + randomAngleY + powerOverload;
+        state.hasFinalDest = true;
+      } else {
+        state.hasFinalDest = false;
+        state.finalDestX = 0;
+        state.finalDestY = 0;
+      }
     }
-  }, [gameState]);
+  }, [gameState, isOpponentTurn, opponentTeam]);
 
   const updateAimFromEvent = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
@@ -2163,12 +2475,12 @@ export default function StadiumCanvas({
     const my = ((clientY - rect.top) / rect.height) * dimensions.height;
     
     // Map to 3D goal mouth at Z = 0
-    const scale = 320 / 14.2; // camera.z absolute in pre-shot state
+    const scale = 320 / 8.1; // camera.z absolute in pre-shot state (z = -8.1 relative to goal line)
     const cx = dimensions.width / 2;
     const cy = dimensions.height * 0.58;
     
     const clickX = (mx - cx) / scale;
-    const clickY = 1.5 - (my - cy) / scale;
+    const clickY = 1.2 - (my - cy) / scale; // camera.y is at 1.2 in pre-shot state of the camera view
     
     // Drag box limits
     const exactTargetX = Math.max(-4.4, Math.min(4.4, clickX));
@@ -2215,21 +2527,21 @@ export default function StadiumCanvas({
       />
 
       {/* 2. WORLD CUP 2026 SCOREBOARD HEADER BAR (IMMERSIVE OVERHEAD OVERLAY) */}
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center max-w-sm md:max-w-md w-[95%] transition-all select-none pointer-events-none drop-shadow-xl">
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center max-w-sm md:max-w-lg w-[95%] transition-all select-none pointer-events-none drop-shadow-2xl">
         {/* Transparent scoreboard with no background card, details or border */}
-        <div className="flex items-start justify-center w-full gap-2 md:gap-4 px-3 py-2 bg-slate-950/70 backdrop-blur-md rounded-2xl border border-white/10 shadow-2xl pointer-events-auto">
+        <div className="flex items-start justify-center w-full gap-3 md:gap-5 px-3 py-2 bg-transparent pointer-events-auto">
           
           {/* Left Player selection details & history */}
-          <div className="flex flex-col items-end justify-start w-2/5 gap-1.5 pt-0.5">
-            <div className="flex items-center gap-2 justify-end">
-              <span className="text-sm md:text-base font-black text-white uppercase tracking-wider block drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+          <div className="flex flex-col items-end justify-start w-2/5 gap-2 pt-0.5">
+            <div className="flex items-center gap-2.5 justify-end">
+              <span className="text-base md:text-lg lg:text-xl font-black text-white uppercase tracking-widest block drop-shadow-[0_1.5px_2px_rgba(0,0,0,0.65)]">
                 {playerTeam.id}
               </span>
-              <FlagBadge teamId={playerTeam.id} className="w-6 h-4 md:w-7 md:h-5 rounded shadow-sm border border-white/10" />
+              <FlagBadge teamId={playerTeam.id} className="w-9 h-6 md:w-11 md:h-7 rounded-sm shadow-md border border-white/20" />
             </div>
             
             {/* Round Indicators for Player under flag */}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
               {Array.from({ length: Math.max(5, shotHistory.length) }).map((_, idx) => {
                 const shot = shotHistory[idx];
                 let bgCircle = "bg-white/5 border-white/10 text-white/30";
@@ -2246,7 +2558,7 @@ export default function StadiumCanvas({
                   bgCircle = "bg-sky-500/20 border-sky-450 text-sky-200 animate-pulse";
                 }
                 return (
-                  <div key={idx} className={`w-3.5 h-3.5 md:w-4 md:h-4 rounded-full border flex items-center justify-center text-[8px] md:text-[9px] font-extrabold transition-all duration-200 ${bgCircle}`}>
+                  <div key={idx} className={`w-4.5 h-4.5 md:w-5 md:h-5 rounded-full border flex items-center justify-center text-[10px] md:text-[11px] font-extrabold transition-all duration-200 ${bgCircle}`}>
                     {textSymbol}
                   </div>
                 );
@@ -2255,10 +2567,10 @@ export default function StadiumCanvas({
           </div>
 
           {/* Centered Large Numeric Score HUD */}
-          <div className="flex items-center justify-center w-1/5 min-w-[70px]">
-            <div className="flex items-center gap-1 font-mono">
+          <div className="flex items-center justify-center w-1/5 min-w-[85px] md:min-w-[105px]">
+            <div className="flex items-center gap-2 font-mono">
               <div 
-                className="flex items-center justify-center min-w-[32px] md:min-w-[38px] text-lg md:text-xl font-black bg-black/55 px-2 py-0.5 rounded-lg border transition-colors duration-200"
+                className="flex items-center justify-center min-w-[42px] md:min-w-[50px] text-2xl md:text-3xl lg:text-4xl font-black bg-black/65 px-3 py-1 rounded-xl border-2 transition-colors duration-200"
                 style={{ 
                   color: playerTeam.colors.shirt === '#ffffff' ? '#f1f5f9' : playerTeam.colors.shirt,
                   borderColor: playerTeam.colors.shirt,
@@ -2268,10 +2580,10 @@ export default function StadiumCanvas({
                 {score}
               </div>
               
-              <span className="text-sm md:text-base font-black text-white/75">-</span>
+              <span className="text-xl md:text-2xl font-black text-white/75">-</span>
               
               <div 
-                className="flex items-center justify-center min-w-[32px] md:min-w-[38px] text-lg md:text-xl font-black bg-black/55 px-2 py-0.5 rounded-lg border transition-colors duration-200"
+                className="flex items-center justify-center min-w-[42px] md:min-w-[50px] text-2xl md:text-3xl lg:text-4xl font-black bg-black/65 px-3 py-1 rounded-xl border-2 transition-colors duration-200"
                 style={{ 
                   color: opponentTeam.colors.shirt === '#ffffff' ? '#f1f5f9' : opponentTeam.colors.shirt,
                   borderColor: opponentTeam.colors.shirt,
@@ -2284,16 +2596,16 @@ export default function StadiumCanvas({
           </div>
 
           {/* Right Opponent selection details & history */}
-          <div className="flex flex-col items-start justify-start w-2/5 gap-1.5 pt-0.5">
-            <div className="flex items-center gap-2 justify-start">
-              <FlagBadge teamId={opponentTeam.id} className="w-6 h-4 md:w-7 md:h-5 rounded shadow-sm border border-white/10" />
-              <span className="text-sm md:text-base font-black text-white uppercase tracking-wider block drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+          <div className="flex flex-col items-start justify-start w-2/5 gap-2 pt-0.5">
+            <div className="flex items-center gap-2.5 justify-start">
+              <FlagBadge teamId={opponentTeam.id} className="w-9 h-6 md:w-11 md:h-7 rounded-sm shadow-md border border-white/20" />
+              <span className="text-base md:text-lg lg:text-xl font-black text-white uppercase tracking-widest block drop-shadow-[0_1.5px_2px_rgba(0,0,0,0.65)]">
                 {opponentTeam.id}
               </span>
             </div>
             
             {/* Round Indicators for Opponent under flag */}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
               {Array.from({ length: Math.max(5, opponentHistory.length) }).map((_, idx) => {
                 const shot = opponentHistory[idx];
                 let bgCircle = "bg-white/5 border-white/10 text-white/30";
@@ -2310,7 +2622,7 @@ export default function StadiumCanvas({
                   bgCircle = "bg-sky-500/20 border-sky-450 text-sky-200 animate-pulse";
                 }
                 return (
-                  <div key={idx} className={`w-3.5 h-3.5 md:w-4 md:h-4 rounded-full border flex items-center justify-center text-[8px] md:text-[9px] font-extrabold transition-all duration-200 ${bgCircle}`}>
+                  <div key={idx} className={`w-4.5 h-4.5 md:w-5 md:h-5 rounded-full border flex items-center justify-center text-[10px] md:text-[11px] font-extrabold transition-all duration-200 ${bgCircle}`}>
                     {textSymbol}
                   </div>
                 );
@@ -2322,13 +2634,20 @@ export default function StadiumCanvas({
       </div>
 
       {/* Floating Corner HUD Navigation & Audio System Triggers */}
-      <div className="absolute top-4 left-4 z-20 pointer-events-auto">
+      <div className="absolute top-4 left-4 z-20 pointer-events-auto flex items-center gap-2">
         <button 
           onClick={onExitSelection} 
           className="w-10 h-10 rounded-full bg-slate-950/80 backdrop-blur-md border border-white/10 flex items-center justify-center text-slate-100 hover:bg-slate-900 hover:text-white transition active:scale-90 cursor-pointer shadow-lg"
           title="Volver"
         >
           <ArrowLeft className="w-5 h-5" />
+        </button>
+        <button 
+          onClick={() => setShowRestartConfirm(true)} 
+          className="w-10 h-10 rounded-full bg-slate-950/80 backdrop-blur-md border border-white/10 flex items-center justify-center text-slate-100 hover:bg-slate-900 hover:text-white transition active:scale-90 cursor-pointer shadow-lg"
+          title="Reiniciar Partido"
+        >
+          <RotateCcw className="w-4 h-4 text-amber-400" />
         </button>
       </div>
 
@@ -2339,13 +2658,6 @@ export default function StadiumCanvas({
           title="Sonido"
         >
           {isAudioMuted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4 text-[#00E5FF]" />}
-        </button>
-        <button 
-          onClick={onResetMatch} 
-          className="w-10 h-10 rounded-full bg-slate-950/80 backdrop-blur-md border border-white/10 flex items-center justify-center text-slate-100 hover:bg-slate-900 hover:text-white transition active:scale-90 cursor-pointer shadow-lg"
-          title="Reiniciar"
-        >
-          <RotateCcw className="w-4 h-4" />
         </button>
       </div>
 
@@ -2385,25 +2697,28 @@ export default function StadiumCanvas({
               </p>
             </>
           ) : (
-            // Goalkeeper direct diving buttons (immersive in the pitch)
-            <div className="grid grid-cols-3 gap-3 w-full mt-1.5 select-none text-center">
+            // Goalkeeper direct diving buttons (immersive in the pitch - pure typography, larger text, no background or emojis)
+            <div className="grid grid-cols-3 gap-6 w-[320px] md:w-[420px] mt-2.5 select-none text-center justify-between items-center bg-transparent">
               <button
                 onClick={() => handleKeeperDiveChoice('left')}
-                className="py-3 px-3 rounded-xl bg-slate-900/90 backdrop-blur-md border border-white/15 text-white font-sans font-black text-[11px] uppercase tracking-wider hover:bg-[#00E5FF]/20 hover:border-[#00E5FF]/40 active:scale-95 transition-all text-center cursor-pointer shadow-[0_4px_16px_rgba(0,0,0,0.6)] flex items-center justify-center gap-1"
+                className="bg-transparent border-none text-white hover:text-[#00FF87] font-sans font-black text-sm md:text-base uppercase tracking-widest active:scale-95 transition-all text-center cursor-pointer drop-shadow-[0_4px_8px_rgba(0,0,0,0.95)] hover:scale-110 flex flex-col items-center gap-1"
               >
-                ⬅️ VOLAR IZQ
+                <span className="text-xl md:text-2xl font-black text-[#00FF87] animate-bounce select-none">↖</span>
+                IZQUIERDA
               </button>
               <button
                 onClick={() => handleKeeperDiveChoice('center')}
-                className="py-3 px-3 rounded-xl bg-slate-900/90 backdrop-blur-md border border-white/15 text-white font-sans font-black text-[11px] uppercase tracking-wider hover:bg-[#00E5FF]/20 hover:border-[#00E5FF]/40 active:scale-95 transition-all text-center cursor-pointer shadow-[0_4px_16px_rgba(0,0,0,0.6)] flex items-center justify-center gap-1"
+                className="bg-transparent border-none text-white hover:text-[#00FF87] font-sans font-black text-sm md:text-base uppercase tracking-widest active:scale-95 transition-all text-center cursor-pointer drop-shadow-[0_4px_8px_rgba(0,0,0,0.95)] hover:scale-110 flex flex-col items-center gap-1"
               >
-                ⬇️ CENTRO
+                <span className="text-xl md:text-2xl font-black text-[#00FF87] animate-bounce select-none" style={{ animationDelay: '0.15s' }}>↑</span>
+                CENTRO
               </button>
               <button
                 onClick={() => handleKeeperDiveChoice('right')}
-                className="py-3 px-3 rounded-xl bg-slate-900/90 backdrop-blur-md border border-white/15 text-white font-sans font-black text-[11px] uppercase tracking-wider hover:bg-[#00E5FF]/20 hover:border-[#00E5FF]/40 active:scale-95 transition-all text-center cursor-pointer shadow-[0_4px_16px_rgba(0,0,0,0.6)] flex items-center justify-center gap-1"
+                className="bg-transparent border-none text-white hover:text-[#00FF87] font-sans font-black text-sm md:text-base uppercase tracking-widest active:scale-95 transition-all text-center cursor-pointer drop-shadow-[0_4px_8px_rgba(0,0,0,0.95)] hover:scale-110 flex flex-col items-center gap-1"
               >
-                VOLAR DER ➡️
+                <span className="text-xl md:text-2xl font-black text-[#00FF87] animate-bounce select-none" style={{ animationDelay: '0.3s' }}>↗</span>
+                DERECHA
               </button>
             </div>
           )}
@@ -2413,53 +2728,152 @@ export default function StadiumCanvas({
       {/* 5. MATCH ROUND REVISION / SUMMARY OVERLAYS CARD */}
       {gameState !== 'PRE_SHOT' && gameState !== 'RUN_UP' && gameState !== 'KICK' && (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-transparent pointer-events-auto p-6 select-none animate-fade-in">
-          <div className="text-center flex flex-col items-center gap-6 animate-scale-up">
-            <div className="flex flex-col items-center gap-1.5">
-              <h1 className="text-5xl md:text-7xl font-display font-black uppercase tracking-wider drop-shadow-[0_8px_16px_rgba(0,0,0,0.95)]">
-                {gameState === 'CELEBRATION' && (
-                  <>
-                    <span className="bg-gradient-to-r from-[#00FF87] to-[#00E5FF] bg-clip-text text-transparent">
-                      {isOpponentTurn ? `¡GOL DE ${opponentTeam.name}!` : '¡GOLAZOOO!'}
-                    </span>
-                    <span className="text-white ml-2 text-4xl md:text-5xl align-middle inline-block select-none filter drop-shadow">
-                      {isOpponentTurn ? '😞' : '⚽'}
-                    </span>
-                  </>
-                )}
-                {gameState === 'SAVED' && (
-                  <span className="text-[#00E5FF]">
-                    {isOpponentTurn ? '¡ATAJADA HEROICA! 🧤' : '¡TIRO SALVADO! 🧤'}
+          {gameState === 'MATCH_OVER' ? (
+            <div className="text-center flex flex-col items-center gap-6 md:gap-7 select-none animate-scale-up max-w-2xl px-4 filter drop-shadow-[0_4px_16px_rgba(0,0,0,0.95)]">
+              {score > opponentScore ? (
+                // CHAMPION COPA GOLDEN TROPHY - Completely transparent and deeply immersive
+                <div className="relative flex flex-col items-center gap-3">
+                  <div className="w-24 h-24 text-yellow-400 animate-bounce flex items-center justify-center filter drop-shadow-[0_0_25px_rgba(250,204,21,0.85)]">
+                    <svg viewBox="0 0 24 24" fill="currentColor" className="w-20 h-20">
+                      <path d="M18 2H6a1 1 0 00-1 1v3c0 2.2 1.8 4 4 4h1v2.1c-2.3.4-4 2.4-4 4.9H4a1 1 0 00-1 1v2a1 1 0 001 1h16a1 1 0 001-1v-2a1 1 0 00-1-1h-1c0-2.5-1.7-4.5-4-4.9V10h1c2.2 0 4-1.8 4-4V3a1 1 0 00-1-1zM7 6V4h4v2H7zm10 0h-4V4h4v2z" />
+                    </svg>
+                  </div>
+                  <span className="text-[10px] md:text-xs font-mono font-black tracking-widest text-yellow-400 uppercase bg-yellow-500/15 border border-yellow-500/30 px-4 py-1 rounded-full animate-pulse">
+                    ⭐ ¡GANAS LA COPA MUNDIAL! ⭐
                   </span>
-                )}
-                {gameState === 'OUT_OF_BOUNDS' && (
-                  <span className="text-rose-500">
-                    {isOpponentTurn ? '¡EL RIVAL LA TIRÓ FUERA! 🎉' : '¡TIRO DESVIADO! ❌'}
+                  <h2 className="text-4xl md:text-7xl font-display font-black text-white mt-1 tracking-wider drop-shadow-[0_4px_12px_rgba(0,0,0,0.95)] bg-gradient-to-r from-yellow-300 via-white to-yellow-300 bg-clip-text text-transparent">
+                    ¡CAMPEÓN DEL MUNDO!
+                  </h2>
+                  <p className="text-[12px] md:text-sm text-slate-200 leading-relaxed max-w-md font-semibold drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
+                    Has coronado a <strong className="text-yellow-400">{playerTeam.name.toUpperCase()}</strong> como el rey absoluto de la Copa del Mundo 2026. ¡Una actuación legendaria!
+                  </p>
+                </div>
+              ) : (
+                // DEFEAT DIGNIFIED SYSTEM
+                <div className="relative flex flex-col items-center gap-3">
+                  <div className="w-24 h-24 text-slate-400 flex items-center justify-center filter drop-shadow-[0_0_15px_rgba(148,163,184,0.4)]">
+                    <svg viewBox="0 0 24 24" fill="currentColor" className="w-18 h-18">
+                      <path d="M12 2A10 10 0 1022 12 10 10 0 0012 2zm1 14h-2v-2h2v2zm0-4h-2V7h2v5z" />
+                    </svg>
+                  </div>
+                  <span className="text-[10px] md:text-xs font-mono font-black tracking-widest text-rose-400 bg-rose-950/20 border border-rose-800/40 px-4 py-1 rounded-full uppercase">
+                    🏆 FIN DE LA AVENTURA 🏆
                   </span>
-                )}
-                {gameState === 'MATCH_OVER' && (
-                  <span className="bg-gradient-to-r from-yellow-400 to-amber-300 bg-clip-text text-transparent animate-pulse">
-                    {score > opponentScore ? '✨ ¡CAMPEÓN! ✨' : '🏆 FIN DE LA COPA 🏆'}
-                  </span>
-                )}
-              </h1>
+                  <h2 className="text-4xl md:text-7xl font-display font-black text-slate-100 mt-1 tracking-wider drop-shadow-[0_4px_12px_rgba(0,0,0,0.95)]">
+                    FINN DEL TORNEO
+                  </h2>
+                  <p className="text-[12px] md:text-sm text-slate-300 leading-relaxed max-w-md font-semibold drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
+                    <strong className="text-white">{playerTeam.name.toUpperCase()}</strong> dio pelea hasta la última instancia pero cayó ante <strong className="text-white">{opponentTeam.name.toUpperCase()}</strong>.
+                  </p>
+                </div>
+              )}
 
-              {/* Removed black description detail card so it doesn't cover the gold trophy cup */}
+              {/* IMMERSIVE SCOREBOARD COMPARISON (pure typography overlaid without rigid card backgrounds) */}
+              <div className="flex flex-col items-center gap-3 mt-3 w-full">
+                <div className="flex items-center justify-center gap-5 md:gap-8 text-2xl md:text-5xl font-display font-black text-white tracking-wider drop-shadow-[0_4px_12px_rgba(0,0,0,0.95)]">
+                  <div className="flex items-center gap-2.5">
+                    <FlagBadge teamId={playerTeam.id} className="w-8 h-5.5 md:w-16 md:h-10 rounded border border-white/20 shadow-2xl" />
+                    <span>{playerTeam.id}</span>
+                  </div>
+                  
+                  <span className="text-3xl md:text-6xl font-extrabold text-[#00FF87] bg-black/45 border border-white/10 px-5 py-2.5 rounded-2xl shadow-2xl min-w-[120px] md:min-w-[170px] text-center inline-block">
+                    {score} - {opponentScore}
+                  </span>
+                  
+                  <div className="flex items-center gap-2.5">
+                    <span>{opponentTeam.id}</span>
+                    <FlagBadge teamId={opponentTeam.id} className="w-8 h-5.5 md:w-16 md:h-10 rounded border border-white/20 shadow-2xl" />
+                  </div>
+                </div>
+
+                {/* Minimal dynamic match progress round lights */}
+                <div className="flex items-center gap-4 mt-2 px-4 py-2 bg-black/40 border border-white/5 rounded-full text-xs font-mono font-bold tracking-wider text-slate-200 backdrop-blur-md shadow-lg">
+                  <span className="flex items-center gap-1.5">
+                    <FlagBadge teamId={playerTeam.id} className="w-4 h-2.5 rounded-sm" /> 
+                    {shotHistory.map(h => h.isGoal ? "🟢" : "🔴").join(" ")}
+                  </span>
+                  <span className="text-slate-600">|</span>
+                  <span className="flex items-center gap-1.5">
+                    {opponentHistory.map(h => h.isGoal ? "🟢" : "🔴").join(" ")} 
+                    <FlagBadge teamId={opponentTeam.id} className="w-4 h-2.5 rounded-sm" />
+                  </span>
+                </div>
+              </div>
+
+              <button
+                onClick={onExitSelection}
+                className="mt-6 py-4 px-12 bg-gradient-to-r from-[#1e3a8a] to-[#00E5FF] text-white transition-all duration-200 font-display font-black text-xs md:text-sm uppercase tracking-widest rounded-full shadow-[0_4px_30px_rgba(0,229,255,0.45)] hover:shadow-[0_4px_45px_rgba(0,229,255,0.65)] active:scale-95 flex items-center justify-center gap-2 cursor-pointer font-extrabold border border-white/15"
+              >
+                <RotateCcw className="w-4.5 h-4.5 text-white" /> VOLVER A JUGAR / SELECCIONAR PAÍS
+              </button>
+            </div>
+          ) : (
+            <div className="text-center flex flex-col items-center gap-6 animate-scale-up">
+              <div className="flex flex-col items-center gap-1.5">
+                <h1 className="text-5xl md:text-7xl font-display font-black uppercase tracking-wider drop-shadow-[0_8px_16px_rgba(0,0,0,0.95)]">
+                  {gameState === 'CELEBRATION' && (
+                    <span className="bg-gradient-to-r from-[#1e3a8a] to-[#00E5FF] bg-clip-text text-transparent animate-pulse animate-duration-1000">
+                      {isOpponentTurn ? `GOL DE ${opponentTeam.name.toUpperCase()}` : '¡GOLAZOOO!'}
+                    </span>
+                  )}
+                  {gameState === 'SAVED' && (
+                    <span className="bg-gradient-to-r from-[#1e3a8a] to-[#00E5FF] bg-clip-text text-transparent">
+                      {isOpponentTurn ? '¡ATAJADA HEROICA!' : '¡TIRO SALVADO!'}
+                    </span>
+                  )}
+                  {gameState === 'OUT_OF_BOUNDS' && (
+                    <span className="bg-gradient-to-r from-[#CE080E] to-[#1e3a8a] bg-clip-text text-transparent">
+                      {isOpponentTurn ? '¡TIRO DESVIADO DEL RIVAL!' : '¡TIRO DESVIADO!'}
+                    </span>
+                  )}
+                </h1>
+              </div>
+
+              <button
+                onClick={onResetMatch}
+                className="py-3 px-8 bg-gradient-to-r from-[#1e3a8a] to-[#00E5FF] text-white transition-all duration-350 font-display font-black text-xs uppercase tracking-widest rounded-full shadow-[0_4px_24px_rgba(0,229,255,0.35)] hover:shadow-[0_4px_36px_rgba(0,229,255,0.55)] active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer border border-[#1e3a8a]/25 font-extrabold"
+              >
+                CONTINUAR TANDA DE PENALES
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 6. IMMERSIVE RESTART WARNING CONFIRMATION DIALOG MODAL */}
+      {showRestartConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md p-6 select-none animate-fade-in pointer-events-auto">
+          <div className="bg-[#0b0f19] border border-white/10 p-6 md:p-8 rounded-2xl max-w-sm md:max-w-md w-full text-center flex flex-col items-center gap-5 shadow-[0_10px_50px_rgba(0,0,0,0.8)]">
+            <div className="w-16 h-16 rounded-full bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500 animate-pulse">
+              <RotateCcw className="w-8 h-8" />
+            </div>
+            
+            <div className="flex flex-col gap-2">
+              <h3 className="text-xl md:text-2xl font-display font-black text-white uppercase tracking-wider">
+                ¿REINICIAR EL PARTIDO DESDE CERO?
+              </h3>
+              <p className="text-xs md:text-sm text-slate-400 leading-relaxed font-semibold">
+                Esta acción cancelará la tanda de penales actual y reiniciará el marcador a 0 - 0. ¿Estás seguro de que deseas reiniciar?
+              </p>
             </div>
 
-            <button
-              onClick={onResetMatch}
-              className="py-3 px-8 bg-gradient-to-r from-[#00FF87] to-[#00E5FF] text-[#002f23] transition-all duration-350 font-display font-black text-xs uppercase tracking-widest rounded-full shadow-[0_4px_24px_rgba(0,229,255,0.45)] hover:shadow-[0_4px_36px_rgba(0,229,255,0.7)] active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer border border-[#00FF87]/20 font-extrabold"
-            >
-              {gameState === 'MATCH_OVER' ? (
-                <>
-                  <RotateCcw className="w-3.5 h-3.5" /> ELEGIR OTRO PAÍS / VOLVER A JUGAR
-                </>
-              ) : (
-                <>
-                  ⚽ CONTINUAR TANDA DE PENALES ⚽
-                </>
-              )}
-            </button>
+            <div className="flex flex-col sm:flex-row gap-3 w-full mt-2">
+              <button
+                onClick={() => setShowRestartConfirm(false)}
+                className="flex-1 py-3 px-5 rounded-xl border border-white/10 text-white font-sans font-bold text-xs uppercase tracking-widest hover:bg-white/5 active:scale-95 transition cursor-pointer text-center"
+              >
+                REGRESAR
+              </button>
+              <button
+                onClick={() => {
+                  setShowRestartConfirm(false);
+                  onRestartMatch();
+                }}
+                className="flex-1 py-3 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-sans font-black text-xs uppercase tracking-widest active:scale-95 transition cursor-pointer text-center shadow-[0_4px_15px_rgba(245,158,11,0.3)]"
+              >
+                SÍ, REINICIAR
+              </button>
+            </div>
           </div>
         </div>
       )}

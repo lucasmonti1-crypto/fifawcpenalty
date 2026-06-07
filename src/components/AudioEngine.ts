@@ -5,10 +5,46 @@ class AudioEngine {
   private humSource: AudioBufferSourceNode | null = null;
   private gainHum: GainNode | null = null;
 
+  private shouldPlayIntro = false;
+
   public init() {
-    if (this.ctx) return;
+    if (this.ctx) {
+      if (this.ctx.state === 'suspended') {
+        this.ctx.resume().then(() => {
+          if (!this.humSource) {
+            this.startAmbientHum();
+          }
+          if (this.shouldPlayIntro && !this.musicSource) {
+            this.playIntroMusic();
+          }
+        });
+      }
+      return;
+    }
     try {
       this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      
+      // Automatic unblock on any standard user interaction
+      const unlock = () => {
+        if (this.ctx && this.ctx.state === 'suspended') {
+          this.ctx.resume().then(() => {
+            if (!this.humSource) {
+              this.startAmbientHum();
+            }
+            if (this.shouldPlayIntro && !this.musicSource) {
+              this.playIntroMusic();
+            }
+          });
+        }
+        document.removeEventListener('click', unlock);
+        document.removeEventListener('keydown', unlock);
+        document.removeEventListener('pointerdown', unlock);
+      };
+      
+      document.addEventListener('click', unlock);
+      document.addEventListener('keydown', unlock);
+      document.addEventListener('pointerdown', unlock);
+
       this.startAmbientHum();
     } catch (e) {
       console.warn('Audio Context not supported in this browser', e);
@@ -20,8 +56,14 @@ class AudioEngine {
     if (this.ctx) {
       if (this.isMuted) {
         this.gainHum?.gain.setValueAtTime(0, this.ctx.currentTime);
+        this.stopMusic();
       } else {
-        this.gainHum?.gain.setValueAtTime(0.04, this.ctx.currentTime);
+        this.gainHum?.gain.setValueAtTime(0.065, this.ctx.currentTime);
+        if (this.shouldPlayIntro) {
+          this.playIntroMusic();
+        } else {
+          this.startAmbientHum();
+        }
       }
     }
   }
@@ -37,6 +79,7 @@ class AudioEngine {
 
   private startAmbientHum() {
     if (!this.ctx || this.isMuted) return;
+    if (this.humSource) return; // already running
 
     // Create custom noise buffer for stadium background hum (4 seconds of unique noise)
     const bufferSize = this.ctx.sampleRate * 4;
@@ -489,6 +532,274 @@ class AudioEngine {
 
     noise.start(now);
     noise.stop(now + duration + 0.1);
+  }
+
+  // --- PROCEDURAL MUSIC AND CROWD AUDIO EXTENSIONS ---
+  private musicSource: AudioBufferSourceNode | null = null;
+  private musicGain: GainNode | null = null;
+
+  public playIntroMusic() {
+    this.init();
+    this.shouldPlayIntro = true;
+    if (!this.ctx || this.isMuted) return;
+    if (this.ctx.state === 'suspended') {
+      return; // Wait for document gesture unlock to trigger it
+    }
+    this.stopMusic();
+
+    const now = this.ctx.currentTime;
+
+    // Fast asynchronous attempt to load the actual INTRO.mp3 upload from client paths
+    const tryLoadRealMp3 = async () => {
+      if (!this.ctx) return false;
+      const possibleURLs = ['/INTRO.mp3', 'INTRO.mp3', '/assets/INTRO.mp3'];
+      for (const url of possibleURLs) {
+        try {
+          const res = await fetch(url);
+          if (!res.ok) continue;
+          const arrayBuf = await res.arrayBuffer();
+          // Decode audio binary in the context
+          const audioBuf = await this.ctx.decodeAudioData(arrayBuf);
+          
+          if (!this.shouldPlayIntro || this.isMuted) return true; // User stopped or muted in the meantime
+          
+          this.stopMusic();
+          this.musicSource = this.ctx.createBufferSource();
+          this.musicSource.buffer = audioBuf;
+          this.musicSource.loop = true;
+          this.musicGain = this.ctx.createGain();
+          this.musicGain.gain.setValueAtTime(0.08, this.ctx.currentTime);
+          this.musicSource.connect(this.musicGain);
+          this.musicGain.connect(this.ctx.destination);
+          this.musicSource.start(0);
+          console.log(`Successfully playing loaded intro music from: ${url}`);
+          return true;
+        } catch (err) {
+          // Try next url path
+        }
+      }
+      return false;
+    };
+
+    tryLoadRealMp3().then((success) => {
+      if (success) {
+        return;
+      }
+      
+      // Fallback in case loading INTRO.mp3 failed or wasn't found in system directories:
+      if (!this.shouldPlayIntro || this.isMuted || !this.ctx) return;
+      this.stopMusic();
+      
+      console.log("Playing fallback procedurally synthesized intro music...");
+      const tempo = 121; // accurate tempo for Un'estate italiana
+      const secondsPerBeat = 60 / tempo;
+      const measureDuration = secondsPerBeat * 16; // 16 beats loop
+      const bufferSize = this.ctx.sampleRate * measureDuration;
+      const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+
+      // Accurate chorus melody notes for "Un'estate italiana" (To Be Number One / Notti Magiche)
+      const melody = [
+        392.00, 392.00, 440.00, 493.88, 392.00, 329.63, 392.00, 392.00, // G4 G4 A4 B4 G4, E4 G4 G4 (Not-ti ma-gi-che)
+        440.00, 493.88, 523.25, 523.25, 493.88, 440.00, 392.00, 349.23, // A4 B4 C5 C5 B4 A4 G4 F4 (in-se-guen-do un gol)
+        293.66, 349.23, 349.23, 392.00, 440.00, 349.23, 329.63, 293.66, // D4 F4 F4 G4 A4 F4 E4 D4 (sot-to il cie-lo di un')
+        329.63, 392.00, 392.00, 440.00, 493.88, 587.33, 523.25, 493.88  // E4 G4 G4 A4 B4 D5 C5 B4 (es-ta-te i-ta-lia-na)
+      ];
+
+      for (let i = 0; i < bufferSize; i++) {
+        const time = i / this.ctx.sampleRate;
+        
+        // 1. Synth kick drum
+        const beatTime = time % secondsPerBeat;
+        const kick = Math.sin(2 * Math.PI * 110 * Math.exp(-beatTime * 36)) * Math.exp(-beatTime * 6) * 0.16;
+
+        // 2. Synthesizer Lead (80s Analog Sawtooth + Triangle Warm Waveform)
+        const noteIdx = Math.floor((time / (secondsPerBeat * 0.5)) % melody.length);
+        const freq = melody[noteIdx];
+        const noteTime = time % (secondsPerBeat * 0.5);
+        
+        const synthOsc = Math.sin(2 * Math.PI * freq * noteTime + 0.15 * Math.sin(2 * Math.PI * 4 * noteTime)) +
+                         0.3 * Math.sin(2 * Math.PI * freq * 2 * noteTime); 
+        const synthEnv = Math.exp(-noteTime * 4.0) * 0.045;
+        const synth = synthOsc * synthEnv;
+
+        // 3. Stadium Warm Harmony Pad Structure
+        const chordTime = time % measureDuration;
+        let chords = 0;
+        if (chordTime < measureDuration * 0.25) {
+          // G Major: G (196), B (246.94), D (293.66)
+          chords = (Math.sin(2 * Math.PI * 196.00 * time) + Math.sin(2 * Math.PI * 246.94 * time)) * 0.012;
+        } else if (chordTime < measureDuration * 0.5) {
+          // C Major: C (130.81), E (164.81), G (196)
+          chords = (Math.sin(2 * Math.PI * 130.81 * time) + Math.sin(2 * Math.PI * 164.81 * time)) * 0.012;
+        } else if (chordTime < measureDuration * 0.75) {
+          // D Major: D (146.83), F# (185.00), A (220)
+          chords = (Math.sin(2 * Math.PI * 146.83 * time) + Math.sin(2 * Math.PI * 185.00 * time)) * 0.012;
+        } else {
+          // E Minor: E (164.81), G (196), B (246.94)
+          chords = (Math.sin(2 * Math.PI * 164.81 * time) + Math.sin(2 * Math.PI * 196.00 * time)) * 0.012;
+        }
+
+        data[i] = kick + synth + chords;
+        if (data[i] > 1.0) data[i] = 1.0;
+        else if (data[i] < -1.0) data[i] = -1.0;
+      }
+
+      this.musicSource = this.ctx.createBufferSource();
+      this.musicSource.buffer = buffer;
+      this.musicSource.loop = true;
+
+      this.musicGain = this.ctx.createGain();
+      this.musicGain.gain.setValueAtTime(0.08, this.ctx.currentTime); // comfortable atmospheric output volume
+
+      this.musicSource.connect(this.musicGain);
+      this.musicGain.connect(this.ctx.destination);
+      this.musicSource.start(0);
+    });
+  }
+
+  public stopMusic() {
+    this.shouldPlayIntro = false;
+    if (this.musicSource) {
+      try {
+        this.musicSource.stop();
+      } catch (e) {}
+      this.musicSource = null;
+    }
+  }
+
+  public playVictoryMusic() {
+    this.init();
+    if (!this.ctx || this.isMuted) return;
+    this.stopMusic();
+
+    const now = this.ctx.currentTime;
+    const tempo = 138;
+    const secondsPerBeat = 60 / tempo;
+    const duration = secondsPerBeat * 16; 
+    const bufferSize = this.ctx.sampleRate * duration;
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+
+    const fanfare = [
+      523.25, 659.25, 783.99, 1046.50, // C5 E5 G5 C6
+      880.00, 1046.50, 1046.50, 1046.50 // A5 C6 C6 C6
+    ];
+
+    for (let i = 0; i < bufferSize; i++) {
+      const time = i / this.ctx.sampleRate;
+      
+      const snare = (Math.random() * 2 - 1) * Math.exp(-(time % (secondsPerBeat * 0.25)) * 15) * 0.035;
+      
+      const noteIdx = Math.floor((time / (secondsPerBeat * 0.5)) % fanfare.length);
+      const freq = fanfare[noteIdx];
+      const noteTime = time % (secondsPerBeat * 0.5);
+      
+      const osc = Math.sin(2 * Math.PI * freq * noteTime) + 0.4 * Math.sin(2 * Math.PI * freq * 2 * noteTime);
+      const env = Math.exp(-noteTime * 3.8) * 0.09;
+      const melody = osc * env;
+
+      const subBass = Math.sin(2 * Math.PI * 65.40 * time) * 0.04;
+
+      data[i] = snare + melody + subBass;
+      if (data[i] > 1.0) data[i] = 1.0;
+      else if (data[i] < -1.0) data[i] = -1.0;
+    }
+
+    this.musicSource = this.ctx.createBufferSource();
+    this.musicSource.buffer = buffer;
+    this.musicSource.loop = false;
+
+    this.musicGain = this.ctx.createGain();
+    this.musicGain.gain.setValueAtTime(0.09, now);
+
+    this.musicSource.connect(this.musicGain);
+    this.musicGain.connect(this.ctx.destination);
+    this.musicSource.start(now);
+
+    // Warm up continuous massive applause
+    this.playCheer();
+  }
+
+  public playDefeatMusic() {
+    this.init();
+    if (!this.ctx || this.isMuted) return;
+    this.stopMusic();
+
+    const now = this.ctx.currentTime;
+    const tempo = 84;
+    const secondsPerBeat = 60 / tempo;
+    const duration = secondsPerBeat * 12;
+    const bufferSize = this.ctx.sampleRate * duration;
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+
+    const sad = [
+      220.00, 261.63, 196.00, 220.00, // A3 C4 G3 A3 minor chord progression
+      174.61, 196.00, 164.81, 146.83 
+    ];
+
+    for (let i = 0; i < bufferSize; i++) {
+      const time = i / this.ctx.sampleRate;
+      
+      const noteIdx = Math.floor((time / secondsPerBeat) % sad.length);
+      const freq = sad[noteIdx];
+      const noteTime = time % secondsPerBeat;
+      
+      const synth = Math.sin(2 * Math.PI * freq * noteTime) * Math.exp(-noteTime * 1.6) * 0.08;
+      data[i] = synth;
+    }
+
+    this.musicSource = this.ctx.createBufferSource();
+    this.musicSource.buffer = buffer;
+    this.musicSource.loop = false;
+
+    this.musicGain = this.ctx.createGain();
+    this.musicGain.gain.setValueAtTime(0.1, now);
+
+    this.musicSource.connect(this.musicGain);
+    this.musicGain.connect(this.ctx.destination);
+    this.musicSource.start(now);
+
+    // Play disappointment groans
+    this.playBooing();
+  }
+
+  public playBooing() {
+    this.init();
+    if (!this.ctx || this.isMuted) return;
+
+    const now = this.ctx.currentTime;
+    const duration = 2.0;
+    const bufferSize = this.ctx.sampleRate * duration;
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let i = 0; i < bufferSize; i++) {
+      const time = i / this.ctx.sampleRate;
+      // Low voice "booo" groan
+      const groan1 = Math.sin(2 * Math.PI * 110 * time + Math.sin(2 * Math.PI * 9 * time) * 0.12) * 0.1;
+      const groan2 = Math.sin(2 * Math.PI * 85 * time) * 0.08;
+      const white = (Math.random() * 2 - 1) * 0.035;
+      data[i] = (groan1 + groan2 + white) * Math.exp(-time * 1.2);
+    }
+
+    const source = this.ctx.createBufferSource();
+    source.buffer = buffer;
+    
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(200, now);
+
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.16, now);
+
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.ctx.destination);
+    
+    source.start(now);
+    source.stop(now + duration + 0.1);
   }
 }
 
