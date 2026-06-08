@@ -2710,15 +2710,16 @@ export default function StadiumCanvas({
                             </svg>
                           ) : (
                             <svg
-                              width="38"
-                              height="22"
-                              viewBox="0 0 38 22"
+                              width="40"
+                              height="26"
+                              viewBox="0 0 40 26"
                               fill="none"
                               className="mx-auto"
                               style={{ transform: opt.dir === 'left' ? 'scaleX(-1)' : undefined }}
                             >
-                              <path d="M3 11 Q 8 3 13 11 T 23 11 T 31 11" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
-                              <path d="M27 6 L33 11 L27 16" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+                              {/* swoosh: thin tail bottom-left -> sweeps up -> arrowhead right */}
+                              <path d="M4 22 C 8 11, 19 8, 30 9" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
+                              <path d="M24 4 L32 9 L24 14" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
                             </svg>
                           )}
                         </span>
