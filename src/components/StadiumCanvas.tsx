@@ -2719,20 +2719,39 @@ export default function StadiumCanvas({
               {aimingStep < 2 && (
                 <div className="grid grid-cols-3 gap-6 w-[300px] md:w-[380px] mb-1 select-none text-center justify-between items-center">
                   {([
-                    { arrow: '↰', label: 'COMBA IZQ', val: -7 },
-                    { arrow: '↑', label: 'RECTO', val: 0 },
-                    { arrow: '↱', label: 'COMBA DER', val: 7 },
+                    { dir: 'right', label: 'COMBA', val: -7 },
+                    { dir: 'up', label: 'RECTO', val: 0 },
+                    { dir: 'left', label: 'COMBA', val: 7 },
                   ] as const).map((opt) => {
                     const active = opt.val === 0 ? curve === 0 : (opt.val < 0 ? curve < 0 : curve > 0);
                     return (
                       <button
-                        key={opt.label}
+                        key={opt.val}
                         onClick={() => setCurve && setCurve(opt.val)}
-                        className={`bg-transparent border-none font-sans font-black text-[11px] md:text-sm uppercase tracking-widest transition-all text-center cursor-pointer drop-shadow-[0_4px_8px_rgba(0,0,0,0.95)] flex flex-col items-center gap-0.5 ${
+                        className={`bg-transparent border-none font-sans font-black text-[11px] md:text-sm uppercase tracking-widest transition-all text-center cursor-pointer drop-shadow-[0_4px_8px_rgba(0,0,0,0.95)] flex flex-col items-center gap-1 ${
                           active ? 'text-[#00E5FF] scale-110' : 'text-white/70 hover:text-white hover:scale-105'
                         }`}
                       >
-                        <span className={`text-xl md:text-2xl font-black ${active ? 'text-[#00E5FF]' : 'text-white/60'}`}>{opt.arrow}</span>
+                        <span className={active ? 'text-[#00E5FF]' : 'text-white/60'}>
+                          {opt.dir === 'up' ? (
+                            <svg width="26" height="22" viewBox="0 0 26 22" fill="none" className="mx-auto">
+                              <path d="M13 19 L13 5" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
+                              <path d="M7 10 L13 4 L19 10" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          ) : (
+                            <svg
+                              width="38"
+                              height="22"
+                              viewBox="0 0 38 22"
+                              fill="none"
+                              className="mx-auto"
+                              style={{ transform: opt.dir === 'left' ? 'scaleX(-1)' : undefined }}
+                            >
+                              <path d="M3 11 Q 8 3 13 11 T 23 11 T 31 11" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
+                              <path d="M27 6 L33 11 L27 16" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          )}
+                        </span>
                         {opt.label}
                       </button>
                     );
