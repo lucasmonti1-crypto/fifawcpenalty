@@ -1906,10 +1906,9 @@ export default function StadiumCanvas({
             state.gameState = 'SAVED';
             if (!state.shotLogged) {
               state.shotLogged = true;
-              audioEngine.playGasp();
               state.onShotComplete(result);
             }
-          } 
+          }
           // Check Goalkeeper block / Save states
           else if (distToGK < gloveRadius) {
             // SOLID CLEAN SAVE!
@@ -1928,12 +1927,7 @@ export default function StadiumCanvas({
             state.gameState = 'SAVED';
             if (!state.shotLogged) {
               state.shotLogged = true;
-              audioEngine.playGKSave(); // major clatter thud
-              if (state.isOpponentTurn) {
-                audioEngine.playCheer();
-              } else {
-                audioEngine.playBooing();
-              }
+              audioEngine.playGKSave(); // physical glove thud (crowd reaction handled by App)
               state.onShotComplete(result);
             }
           } 
@@ -1958,11 +1952,6 @@ export default function StadiumCanvas({
               if (!state.shotLogged) {
                 state.shotLogged = true;
                 audioEngine.playNetSwish();
-                if (state.isOpponentTurn) {
-                  audioEngine.playBooing(); // Opponent scores
-                } else {
-                  audioEngine.playCheer(); // We score
-                }
                 state.netPoints.forEach(p => {
                   const dx = p.x - b.x;
                   const dy = p.y - b.y;
@@ -1988,12 +1977,7 @@ export default function StadiumCanvas({
               state.gameState = 'SAVED';
               if (!state.shotLogged) {
                 state.shotLogged = true;
-                audioEngine.playGKSave(); // glove thud
-                if (state.isOpponentTurn) {
-                  audioEngine.playCheer(); // We save
-                } else {
-                  audioEngine.playBooing(); // Saved by opponent
-                }
+                audioEngine.playGKSave(); // glove thud (crowd reaction handled by App)
                 state.onShotComplete(result);
               }
             }
@@ -2002,14 +1986,7 @@ export default function StadiumCanvas({
           else if (isBetweenPosts && isUnderBar) {
             // GOAL!! Trigger net expansion pull and sparkles
             audioEngine.playNetSwish();
-            if (!state.shotLogged) {
-              if (state.isOpponentTurn) {
-                audioEngine.playBooing();
-              } else {
-                audioEngine.playCheer();
-              }
-            }
-            
+
             state.screenShake = 11.5;
             result.isGoal = true;
             result.message = (Math.abs(b.x) > 3.2 && b.y > 1.55)
@@ -2054,11 +2031,9 @@ export default function StadiumCanvas({
             state.gameState = 'CELEBRATION';
             if (!state.shotLogged) {
               state.shotLogged = true;
-              // Whistle also blows
-              audioEngine.playWhistle();
               state.onShotComplete(result);
             }
-          } 
+          }
           // Completely wide or over top
           else {
             result.isOffTarget = true;
@@ -2068,12 +2043,6 @@ export default function StadiumCanvas({
             state.gameState = 'OUT_OF_BOUNDS';
             if (!state.shotLogged) {
               state.shotLogged = true;
-              if (state.isOpponentTurn) {
-                audioEngine.playCheer(); // Opponent missed, home crowd cheers!
-              } else {
-                audioEngine.playGasp();
-                audioEngine.playBooing(); // We missed, home crowd groans!
-              }
               state.onShotComplete(result);
             }
           }
@@ -2424,8 +2393,7 @@ export default function StadiumCanvas({
     const state = stateRef.current;
     
     if (gameState === 'RUN_UP') {
-      // Whistle blow upon kickoff
-      audioEngine.playWhistle();
+      // (Ref whistle now fires on PRE_SHOT for the player only)
       onAnimationTriggered();
     } else if (gameState === 'PRE_SHOT') {
       // RESET Player positioning back to original spot (nearer distance)

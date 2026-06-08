@@ -60,15 +60,27 @@ export default function App() {
     };
   }, [score, opponentScore, shotHistory, opponentHistory, currentShotNum, isOpponentTurn]);
 
-  // Loop intro music on team select screen, and stop on kickoff
+  // Soundtrack/ambience: intro anthem on the menu, looping stadium crowd in-match
   useEffect(() => {
     if (gameState === 'TEAM_SELECT') {
       audioEngine.init();
+      audioEngine.stopMatchAmbience();
       audioEngine.playIntroMusic();
+    } else if (gameState === 'MATCH_OVER') {
+      audioEngine.stopMusic();
+      audioEngine.stopMatchAmbience(); // victory/defeat music takes over
     } else {
       audioEngine.stopMusic();
+      audioEngine.startMatchAmbience();
     }
   }, [gameState]);
+
+  // Referee whistle the instant it is OUR turn to take a penalty (not the rival's)
+  useEffect(() => {
+    if (gameState === 'PRE_SHOT' && !isOpponentTurn) {
+      audioEngine.playRefWhistle();
+    }
+  }, [gameState, isOpponentTurn]);
 
   // On match completion: advance the bracket, crown a champion, or get eliminated
   useEffect(() => {
@@ -93,9 +105,8 @@ export default function App() {
     setPlayerTeam(yourTeam);
     setOpponentTeam(defenderTeam);
     
-    // Warm up Web Audio engine
+    // Warm up the audio engine (the ref whistle fires on the PRE_SHOT effect)
     audioEngine.init();
-    audioEngine.playWhistle();
 
     // Begin tournament — the chosen rival is your Round-of-16 opponent
     setStageIndex(0);
@@ -167,6 +178,13 @@ export default function App() {
       currentShotNum: round,
       isOpponentTurn: isOppTurn
     } = latestStateRef.current;
+
+    // Crowd/commentary layer: OUR goal erupts; anything else gets the "salvada" sting
+    if (result.isGoal && !isOppTurn) {
+      audioEngine.playGoalCrowd();
+    } else {
+      audioEngine.playNonGoal();
+    }
 
     if (!isOppTurn) {
       // User just shot
@@ -255,7 +273,6 @@ export default function App() {
 
     audioEngine.stopMusic();
     audioEngine.init();
-    audioEngine.playWhistle();
     setGameState('PRE_SHOT');
   };
 
@@ -268,10 +285,9 @@ export default function App() {
     setCurrentShotNum(1);
     setIsOpponentTurn(false);
     
-    // Play kickoff whistle
+    // Warm up audio (the ref whistle fires on the PRE_SHOT effect)
     audioEngine.init();
-    audioEngine.playWhistle();
-    
+
     // Set state back to kickoff
     setGameState('PRE_SHOT');
   };

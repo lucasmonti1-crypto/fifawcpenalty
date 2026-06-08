@@ -9,6 +9,14 @@ class AudioEngine {
   private introEl: HTMLAudioElement | null = null; // the real WC2026 anthem (mp3)
   private unlockAttached = false;
 
+  // --- Real recorded match audio (mp3) layered like a broadcast ---
+  private shouldPlayAmbience = false;
+  private ambienceEl: HTMLAudioElement | null = null;  // crowd ambience loop (continuous)
+  private golEstadioEl: HTMLAudioElement | null = null; // crowd erupts on OUR goal
+  private golRelatoEl: HTMLAudioElement | null = null;  // commentator screams the goal
+  private salvadaEl: HTMLAudioElement | null = null;    // any NON-(our-goal) outcome
+  private silbatoEl: HTMLAudioElement | null = null;    // ref whistle before OUR penalty
+
   public init() {
     if (!this.ctx) {
       try {
@@ -41,25 +49,85 @@ class AudioEngine {
       this.ctx.resume().catch(() => {});
     }
     if (this.isMuted) return;
-    if (!this.humSource) this.startAmbientHum();
     if (this.shouldPlayIntro && this.introEl && this.introEl.paused) {
       this.introEl.play().catch(() => {});
     }
+    if (this.shouldPlayAmbience && this.ambienceEl && this.ambienceEl.paused) {
+      this.ambienceEl.play().catch(() => {});
+    }
+  }
+
+  // --- Helpers for the recorded match audio layers ---
+  private ensureEl(el: HTMLAudioElement | null, src: string, volume: number, loop = false): HTMLAudioElement {
+    if (!el) {
+      el = new Audio(src);
+      el.loop = loop;
+      el.volume = volume;
+      el.preload = 'auto';
+    }
+    return el;
+  }
+
+  private fireOneShot(el: HTMLAudioElement) {
+    if (this.isMuted) return;
+    try {
+      el.currentTime = 0;
+    } catch (e) {}
+    el.play().catch(() => {});
+  }
+
+  // Continuous crowd ambience for the whole match (loops, sits low in the mix)
+  public startMatchAmbience() {
+    this.shouldPlayAmbience = true;
+    this.init();
+    this.ambienceEl = this.ensureEl(this.ambienceEl, '/audio/ambiente.mp3', 0.3, true);
+    if (this.isMuted) return;
+    if (this.ambienceEl.paused) this.ambienceEl.play().catch(() => {});
+  }
+
+  public stopMatchAmbience() {
+    this.shouldPlayAmbience = false;
+    if (this.ambienceEl) this.ambienceEl.pause();
+  }
+
+  // OUR goal: crowd erupts (bg) + commentator screams (clearer), layered over ambience
+  public playGoalCrowd() {
+    this.init();
+    this.golEstadioEl = this.ensureEl(this.golEstadioEl, '/audio/gol-estadio.mp3', 0.5);
+    this.golRelatoEl = this.ensureEl(this.golRelatoEl, '/audio/gol-relato.mp3', 0.85);
+    // a non-goal sound must never overlap a goal
+    if (this.salvadaEl) this.salvadaEl.pause();
+    this.fireOneShot(this.golEstadioEl);
+    this.fireOneShot(this.golRelatoEl);
+  }
+
+  // Any outcome that is NOT our goal (opponent goal, save, woodwork, off target)
+  public playNonGoal() {
+    this.init();
+    this.salvadaEl = this.ensureEl(this.salvadaEl, '/audio/salvada.mp3', 0.8);
+    if (this.golEstadioEl) this.golEstadioEl.pause();
+    if (this.golRelatoEl) this.golRelatoEl.pause();
+    this.fireOneShot(this.salvadaEl);
+  }
+
+  // Referee whistle the moment the user is allowed to take their penalty
+  public playRefWhistle() {
+    this.init();
+    this.silbatoEl = this.ensureEl(this.silbatoEl, '/audio/silbato.mp3', 0.65);
+    this.fireOneShot(this.silbatoEl);
   }
 
   public setMute(muted: boolean) {
     this.isMuted = muted;
     if (this.isMuted) {
       if (this.ctx) this.gainHum?.gain.setValueAtTime(0, this.ctx.currentTime);
-      // Pause the anthem WITHOUT clearing shouldPlayIntro so unmute can resume it
+      // Pause WITHOUT clearing the shouldPlay flags so unmute can resume them
       if (this.introEl) this.introEl.pause();
+      if (this.ambienceEl) this.ambienceEl.pause();
     } else {
       if (this.ctx) this.gainHum?.gain.setValueAtTime(0.065, this.ctx.currentTime);
-      if (this.shouldPlayIntro && this.introEl) {
-        this.introEl.play().catch(() => {});
-      } else {
-        this.startAmbientHum();
-      }
+      if (this.shouldPlayIntro && this.introEl) this.introEl.play().catch(() => {});
+      if (this.shouldPlayAmbience && this.ambienceEl) this.ambienceEl.play().catch(() => {});
     }
   }
 
