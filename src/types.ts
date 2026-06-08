@@ -17,6 +17,12 @@ export interface Team {
 export type ShotDirection = 'left' | 'center' | 'right';
 export type ShotHeight = 'low' | 'high'; // low (ground/mid), high (top corners / under bar)
 
+// Single source of truth for the power "sweet spot". Used by the physics,
+// the isPerfect flag and the on-screen power bar so they never drift apart.
+export const POWER_SWEET_SPOT = { min: 70, max: 86 } as const;
+export const isSweetSpot = (power: number): boolean =>
+  power >= POWER_SWEET_SPOT.min && power <= POWER_SWEET_SPOT.max;
+
 export interface ShotResult {
   isGoal: boolean;
   isSaved: boolean;
@@ -32,6 +38,9 @@ export interface ShotResult {
 }
 
 export type GameState = 'TEAM_SELECT' | 'PRE_SHOT' | 'RUN_UP' | 'KICK' | 'BALL_FLIGHT' | 'CELEBRATION' | 'SAVED' | 'OUT_OF_BOUNDS' | 'MATCH_OVER';
+
+// Knockout bracket: win each tie to advance until you lift the cup.
+export const TOURNAMENT_STAGES = ['Octavos de final', 'Cuartos de final', 'Semifinal', 'Final'] as const;
 
 export const TEAMS: Team[] = [
   {
@@ -121,8 +130,8 @@ export const TEAMS: Team[] = [
   },
   {
     id: 'ENG',
-    name: 'Jude Bellingham',
-    player: 'Bellingham',
+    name: 'England',
+    player: 'Jude Bellingham',
     accuracy: 88,
     power: 85,
     curve: 80,
@@ -175,6 +184,90 @@ export const TEAMS: Team[] = [
       stripes: '#E11D48',
       pattern: 'squares'
     }
+  },
+  {
+    id: 'BEL',
+    name: 'Belgium',
+    player: 'Kevin De Bruyne',
+    accuracy: 89,
+    power: 84,
+    curve: 86,
+    colors: {
+      shirt: '#E30613',
+      shorts: '#000000',
+      socks: '#E30613',
+      pattern: 'plain'
+    }
+  },
+  {
+    id: 'USA',
+    name: 'United States',
+    player: 'Christian Pulisic',
+    accuracy: 84,
+    power: 86,
+    curve: 78,
+    colors: {
+      shirt: '#ffffff',
+      shorts: '#0A3161',
+      socks: '#B31942',
+      pattern: 'plain'
+    }
+  },
+  {
+    id: 'MEX',
+    name: 'Mexico',
+    player: 'Hirving Lozano',
+    accuracy: 85,
+    power: 83,
+    curve: 82,
+    colors: {
+      shirt: '#006847',
+      shorts: '#ffffff',
+      socks: '#CE1126',
+      pattern: 'plain'
+    }
+  },
+  {
+    id: 'ITA',
+    name: 'Italy',
+    player: 'Federico Chiesa',
+    accuracy: 88,
+    power: 83,
+    curve: 84,
+    colors: {
+      shirt: '#0066A6',
+      shorts: '#ffffff',
+      socks: '#0066A6',
+      pattern: 'plain'
+    }
+  },
+  {
+    id: 'COL',
+    name: 'Colombia',
+    player: 'Luis Díaz',
+    accuracy: 86,
+    power: 85,
+    curve: 83,
+    colors: {
+      shirt: '#FCD116',
+      shorts: '#003893',
+      socks: '#CE1126',
+      pattern: 'plain'
+    }
+  },
+  {
+    id: 'MAR',
+    name: 'Morocco',
+    player: 'Achraf Hakimi',
+    accuracy: 85,
+    power: 84,
+    curve: 80,
+    colors: {
+      shirt: '#C1272D',
+      shorts: '#C1272D',
+      socks: '#006233',
+      pattern: 'plain'
+    }
   }
 ];
 
@@ -194,5 +287,11 @@ export const GOALKEEPER_REGISTRY: Record<string, Goalkeeper> = {
   ENG: { name: 'Jordan Pickford', reflejos: 90, alcance: 86 },
   NED: { name: 'Bart Verbruggen', reflejos: 88, alcance: 89 },
   URU: { name: 'Sergio Rochet', reflejos: 88, alcance: 90 },
-  CRO: { name: 'Dominik Livaković', reflejos: 91, alcance: 89 }
+  CRO: { name: 'Dominik Livaković', reflejos: 91, alcance: 89 },
+  BEL: { name: 'Thibaut Courtois', reflejos: 92, alcance: 94 },
+  USA: { name: 'Matt Turner', reflejos: 86, alcance: 87 },
+  MEX: { name: 'Guillermo Ochoa', reflejos: 89, alcance: 86 },
+  ITA: { name: 'Gianluigi Donnarumma', reflejos: 92, alcance: 93 },
+  COL: { name: 'David Ospina', reflejos: 87, alcance: 85 },
+  MAR: { name: 'Yassine Bounou', reflejos: 90, alcance: 88 }
 };

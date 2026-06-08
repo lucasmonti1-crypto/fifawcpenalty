@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Team, GameState, ShotDirection, ShotHeight, ShotResult, GOALKEEPER_REGISTRY } from '../types';
+import { Team, GameState, ShotDirection, ShotHeight, ShotResult, GOALKEEPER_REGISTRY, isSweetSpot, TOURNAMENT_STAGES } from '../types';
 import { audioEngine } from './AudioEngine';
 import { Volume2, VolumeX, ArrowLeft, Trophy, RotateCcw, Gamepad2, Info, XCircle } from 'lucide-react';
 import { FlagBadge } from './FlagBadge';
@@ -30,7 +30,53 @@ interface StadiumCanvasProps {
   onExitSelection: () => void;
   onResetMatch: () => void;
   onRestartMatch: () => void;
+
+  // Knockout tournament context
+  stageIndex?: number;
+  totalStages?: number;
+  stageName?: string;
+  nextOpponent?: Team | null;
+  onAdvance?: () => void;
 }
+
+// --- Ball flight tuning (single source of truth, used by init + per-tick update) ---
+// Gravity per tick. Used identically when computing the launch velocity AND when
+// integrating the flight, so the ball always lands exactly on its target while
+// tracing a real parabola (high shots rise and dip in).
+const BALL_GRAVITY = -0.0014;
+// Lateral curve acceleration per tick per unit of curve (-10..10). Compensated at
+// launch so the ball still lands on target but banana-bends visibly on the way.
+const CURVE_DRIFT = 0.0011;
+
+/**
+ * Converts a keeper's GUESS (a sector + a height) into the physical hand-reach
+ * position it dives to. Crucially this is independent of where the ball actually
+ * goes: the keeper commits to a spot limited by its `reach` stat, and whether it
+ * saves is then decided by the real ball-vs-glove distance at the goal line.
+ * That makes precise placement (near the post / top corner) beat even a correct
+ * guess, instead of "guess right = automatic save".
+ */
+const computeKeeperDiveTarget = (
+  dir: ShotDirection,
+  height: ShotHeight,
+  reach: number
+): { x: number; y: number } => {
+  // Horizontal stretch. Posts sit at ±4.5; the keeper's hand only reaches ~2.25..3.2
+  // so the very corner stays open — that gap is the striker's reward for accuracy.
+  const sideReach = 2.25 + ((reach - 85) / 14) * 0.95; // ~2.25 (reach 85) .. ~3.2 (reach 99)
+  let x = 0;
+  if (dir === 'left') x = -sideReach;
+  else if (dir === 'right') x = sideReach;
+
+  let y: number;
+  if (dir === 'center') {
+    y = height === 'high' ? 1.55 : 0.25; // springs up to tip vs stays grounded
+  } else {
+    const highReach = 1.35 + ((reach - 85) / 14) * 0.40; // ~1.35 .. ~1.75
+    y = height === 'high' ? highReach : 0.55;
+  }
+  return { x, y };
+};
 
 export default function StadiumCanvas({
   playerTeam,
@@ -55,7 +101,12 @@ export default function StadiumCanvas({
   opponentHistory = [],
   onExitSelection,
   onResetMatch,
-  onRestartMatch
+  onRestartMatch,
+  stageIndex = 0,
+  totalStages = 4,
+  stageName = '',
+  nextOpponent = null,
+  onAdvance
 }: StadiumCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   
@@ -149,9 +200,14 @@ export default function StadiumCanvas({
       diveProgress: 0,
       diveDelay: 0,
       startDiveZ: -5.5,
-      hairColor: '#331a00'
+      hairColor: '#331a00',
+      tookOff: false,
+      landed: false
     },
-    
+
+    // Motion-blur trail of the diving keeper (projected screen positions)
+    keeperTrail: [] as { x: number; y: number; scale: number; angle: number; dp: number }[],
+
     // Net physical simulation (grid of points at z=0 to z=0.8)
     netPoints: [] as { x: number; y: number; z: number; ox: number; oy: number; oz: number; vx: number; vy: number; vz: number }[],
     
@@ -500,9 +556,11 @@ export default function StadiumCanvas({
           }
         }
       } else if (state.gameState === 'RUN_UP' || state.gameState === 'KICK') {
-        // Slight forward tilt on approach
-        camera.y = camera.y * 0.95 + 1.15 * 0.05;
-        camera.z = camera.z * 0.95 + -7.7 * 0.05;
+        // Pull back a touch (and rise) into a classic penalty camera so the kicker
+        // never fills the screen — you can see the taker, the goal AND the keeper.
+        camera.x = camera.x * 0.92 + 0 * 0.08;
+        camera.y = camera.y * 0.94 + 1.35 * 0.06;
+        camera.z = camera.z * 0.94 + -9.1 * 0.06;
       } else if (state.gameState === 'BALL_FLIGHT' || state.gameState === 'CELEBRATION' || state.gameState === 'SAVED' || state.gameState === 'OUT_OF_BOUNDS') {
         // Broadcast tracking panning of the shot
         const targetCamX = state.ball.x * 0.45;
@@ -1045,7 +1103,7 @@ export default function StadiumCanvas({
              if (!state.isOpponentTurn) {
                // USER KICKS (Normal mode - with highly-coherent shot measurements and pressure factors)
                const finalPower = state.power;
-               const perfectMult = (finalPower >= 72 && finalPower <= 86) ? 1.0 : 0.82;
+               const perfectMult = isSweetSpot(finalPower) ? 1.0 : 0.82;
                
                // Slower Z-velocity to scale down flight speed, making it highly cinematic and realistic ("que no viaje tan rapido")
                velocityZ = 0.045 + (finalPower / 100) * 0.11 * perfectMult;
@@ -1089,7 +1147,11 @@ export default function StadiumCanvas({
                // Overpowered shots naturally fly high
                const verticalLift = finalPower > 88 ? (finalPower - 88) * 0.09 : 0;
 
-               finalDestX = exactX + deviationX;
+               // Curve nudges WHERE the ball ends up (right = +, left = -), so the
+               // swerve is a real aiming modifier that the cursor reflects.
+               const curveLandingShift = state.curve * 0.11;
+
+               finalDestX = exactX + deviationX + curveLandingShift;
                finalDestY = exactY + deviationY + verticalLift;
 
                // Clamp coordinates to keep it realistic but possible to miss completely
@@ -1101,11 +1163,10 @@ export default function StadiumCanvas({
                finalDestY = state.finalDestY;
 
                const flightTicks = Math.round(5.5 / velocityZ);
-               const horizontalAirDrift = state.curve * 0.0003; // reduced curve scale dramatically to avoid fictitious curve guiding
+               const horizontalAirDrift = state.curve * CURVE_DRIFT;
                const totalDriftX = (horizontalAirDrift * (flightTicks + 1)) / 2;
-               
-               const realGravityTick = -0.0012; // light physical gravity matched to slower velocity mapping
-               const totalDriftY = (realGravityTick * (flightTicks + 1)) / 2;
+
+               const totalDriftY = (BALL_GRAVITY * (flightTicks + 1)) / 2;
 
                state.ball.vx = (finalDestX - state.ball.x) / flightTicks - totalDriftX;
                state.ball.vy = (finalDestY - state.ball.y) / flightTicks - totalDriftY;
@@ -1131,55 +1192,44 @@ export default function StadiumCanvas({
                  gkStrategy = 'stay'; // covers central chip shots / panenkas
                }
 
-               // Goalkeeper diving decision mapping
+               // The keeper guesses a SECTOR (and a height) then commits to a dive.
+               // It never snaps onto the ball — the physical glove distance decides the save.
+               const ballSector: ShotDirection = finalDestX < -1.2 ? 'left' : (finalDestX > 1.2 ? 'right' : 'center');
                let keeperDiveDir: ShotDirection = 'center';
                let keeperHeightLoc: ShotHeight = 'low';
 
                if (gkStrategy === 'anticipate') {
-                 // Pre-dives early
+                 // Commits early on a blind guess: looks heroic when right, wrong-footed when wrong
                  keeperDiveDir = Math.random() < 0.5 ? 'left' : 'right';
                  keeperHeightLoc = Math.random() < 0.45 ? 'low' : 'high';
                  state.keeper.diveDelay = 0; // starts immediately
                } else if (gkStrategy === 'react') {
-                 // Reactive - guess chance depends directly on reflexes
+                 // Reads the shot; chance of picking the right side scales with reflexes
                  const diveCorrectChance = 0.4 + ((reflexes - 85) / 15) * 0.35;
-                 const ballSector: 'left' | 'right' | 'center' = finalDestX < -1.2 ? 'left' : (finalDestX > 1.2 ? 'right' : 'center');
-                 
                  if (Math.random() < diveCorrectChance) {
                    keeperDiveDir = ballSector;
+                   keeperHeightLoc = finalDestY > 1.45 ? 'high' : 'low'; // reads height too when it reads the side
                  } else {
                    keeperDiveDir = ballSector === 'left' ? 'right' : (ballSector === 'right' ? 'left' : (Math.random() < 0.5 ? 'left' : 'right'));
+                   keeperHeightLoc = Math.random() < 0.5 ? 'low' : 'high';
                  }
-                 
-                 keeperHeightLoc = finalDestY > 1.45 ? 'high' : 'low';
-                 state.keeper.diveDelay = Math.max(3, Math.round(15 - (reflexes - 85) * 0.5)); 
+                 state.keeper.diveDelay = Math.max(2, Math.round(12 - (reflexes - 85) * 0.4));
                } else {
+                 // Stays central to smother panenkas / low-centre shots
                  keeperDiveDir = 'center';
                  keeperHeightLoc = finalDestY > 1.6 ? 'high' : 'low';
-                 state.keeper.diveDelay = 6;
+                 state.keeper.diveDelay = 5;
                }
 
                // Record starting coordinates
                state.keeper.startX = state.keeper.x;
                state.keeper.startY = state.keeper.y;
 
-               const ballSectorZone: 'left' | 'right' | 'center' = finalDestX < -1.1 ? 'left' : (finalDestX > 1.1 ? 'right' : 'center');
-               const guessedCorrectly = keeperDiveDir === ballSectorZone;
+               // Commit to a reach-limited hand target derived from the guess (not the ball)
+               const gkDive = computeKeeperDiveTarget(keeperDiveDir, keeperHeightLoc, reach);
+               state.keeper.targetX = gkDive.x;
+               state.keeper.targetY = gkDive.y;
 
-               if (guessedCorrectly) {
-                 state.keeper.targetX = Math.min(3.7, Math.max(-3.7, finalDestX));
-                 const maxVerticalReach = 0.35 + ((reach - 85) / 15) * 2.1;
-                 state.keeper.targetY = Math.min(maxVerticalReach, Math.max(0.35, finalDestY));
-               } else {
-                 if (ballSectorZone === 'left') {
-                   state.keeper.targetX = 3.3; // dives right
-                 } else if (ballSectorZone === 'right') {
-                   state.keeper.targetX = -3.3; // dives left
-                 } else {
-                   state.keeper.targetX = Math.random() < 0.5 ? -3.2 : 3.2;
-                 }
-                 state.keeper.targetY = keeperHeightLoc === 'high' ? 1.7 : 0.45;
-               }
                // Dynamic trigger computation for realistic timing coherence with shot duration
                state.keeper.startDiveZ = -5.5 + state.keeper.diveDelay * velocityZ;
                state.keeper.diveProgress = 0;
@@ -1192,12 +1242,11 @@ export default function StadiumCanvas({
                velocityZ = 0.045 + (state.aiPower / 100) * 0.11;
 
                const flightTicks = Math.round(5.5 / velocityZ);
-               const horizontalAirDrift = state.aiCurve * 0.0003;
+               const horizontalAirDrift = state.aiCurve * CURVE_DRIFT;
                const totalDriftX = (horizontalAirDrift * (flightTicks + 1)) / 2;
                state.ball.vx = (finalDestX - state.ball.x) / flightTicks - totalDriftX;
-               
-               const realGravityTick = -0.0025;
-               const totalDriftY = (realGravityTick * (flightTicks + 1)) / 2;
+
+               const totalDriftY = (BALL_GRAVITY * (flightTicks + 1)) / 2;
                state.ball.vy = (finalDestY - state.ball.y) / flightTicks - totalDriftY;
                state.ball.vz = velocityZ;
 
@@ -1207,29 +1256,16 @@ export default function StadiumCanvas({
                state.keeper.startX = state.keeper.x;
                state.keeper.startY = state.keeper.y;
 
-               const ballSectorZone: 'left' | 'right' | 'center' = finalDestX < -1.1 ? 'left' : (finalDestX > 1.1 ? 'right' : 'center');
-               const userDivedCorrectly = (state.direction === ballSectorZone);
+               // User (as keeper) only picks a SIDE. We auto-pick the height band toward
+               // where the ball is heading so reading the side is rewarded, but the physical
+               // glove distance still decides it — perfect corners can still beat the dive.
+               const userGKStat = GOALKEEPER_REGISTRY[state.playerTeam.id] || { name: 'Portero', reflejos: 90, alcance: 90 };
+               const userHeightGuess: ShotHeight = finalDestY > 1.4 ? 'high' : 'low';
+               const userDive = computeKeeperDiveTarget(state.direction, userHeightGuess, userGKStat.alcance);
+               state.keeper.targetX = userDive.x;
+               state.keeper.targetY = userDive.y;
 
-               if (userDivedCorrectly) {
-                 state.keeper.targetX = Math.min(3.7, Math.max(-3.7, finalDestX));
-                 const userGKStat = GOALKEEPER_REGISTRY[state.playerTeam.id] || { name: 'Portero', reflejos: 90, alcance: 90 };
-                 const maxVerticalReach = 0.35 + ((userGKStat.alcance - 85) / 15) * 2.1;
-                 state.keeper.targetY = Math.min(maxVerticalReach, Math.max(0.35, finalDestY));
-                 stateRef.current.opponentShotSaved = true;
-               } else {
-                 if (state.direction === 'left') {
-                   state.keeper.targetX = -3.2;
-                   state.keeper.targetY = 0.8;
-                 } else if (state.direction === 'right') {
-                   state.keeper.targetX = 3.2;
-                   state.keeper.targetY = 0.8;
-                 } else {
-                   state.keeper.targetX = 0;
-                   state.keeper.targetY = 0.2;
-                 }
-                 stateRef.current.opponentShotSaved = false;
-               }
-               state.keeper.diveDelay = Math.min(6, flightTicks - 12);
+               state.keeper.diveDelay = Math.max(2, Math.min(6, flightTicks - 12));
                state.keeper.startDiveZ = -5.5 + state.keeper.diveDelay * velocityZ;
                state.keeper.diveProgress = 0;
              }
@@ -1540,7 +1576,22 @@ export default function StadiumCanvas({
           }
           
           gK.diveProgress = t;
-          
+
+          // Explosive takeoff dust the instant the keeper launches
+          if (!gK.tookOff && t > 0.03) {
+            gK.tookOff = true;
+            for (let k = 0; k < 10; k++) {
+              state.particles.push({ x: gK.startX, y: 0.05, z: 0, vx: (Math.random() - 0.5) * 2.5, vy: Math.random() * 2.2, vz: (Math.random() - 0.3) * 1.0, color: '#cbd5e1', size: Math.random() * 3 + 2, alpha: 0.8, life: 0.9 });
+            }
+          }
+          // Landing dust burst as the dive bottoms out
+          if (!gK.landed && t > 0.9) {
+            gK.landed = true;
+            for (let k = 0; k < 14; k++) {
+              state.particles.push({ x: gK.x, y: 0.05, z: 0, vx: (Math.random() - 0.5) * 3.0 + (gK.targetX > 0 ? 1 : -1) * 1.0, vy: Math.random() * 2.4, vz: (Math.random() - 0.3) * 1.0, color: '#e2e8f0', size: Math.random() * 3.5 + 2, alpha: 0.85, life: 1.0 });
+            }
+          }
+
           // Ultra-smooth, elegant composite blend easing curve that keeps dives in complete athletic speed coherence with the ball
           const easeT = 0.3 * t + 0.7 * (1 - Math.pow(1 - t, 2.2));
           
@@ -1552,12 +1603,15 @@ export default function StadiumCanvas({
           
           // Tilt rotation of diving body
           if (gK.targetX !== 0) {
-            gK.angle = (gK.targetX > 0 ? 1 : -1) * 0.92 * easeT;
-            gK.scaleY = 0.55;
+            // Low dives lean more (toward horizontal); high dives stay upright (a leap)
+            const diveHigh = gK.targetY > 1.0;
+            const leanMax = diveHigh ? 0.5 : 0.82;
+            gK.angle = (gK.targetX > 0 ? 1 : -1) * leanMax * easeT;
+            gK.scaleY = 1 - (diveHigh ? 0.12 : 0.26) * easeT;
           } else {
             // Centered reaction
             gK.angle = 0;
-            gK.scaleY = gK.targetY > 0.8 ? 0.8 : 1.0;
+            gK.scaleY = gK.targetY > 0.8 ? (1 - 0.1 * easeT) : (1.0 - 0.14 * easeT);
           }
         }
       } else {
@@ -1568,84 +1622,156 @@ export default function StadiumCanvas({
         gK.scaleY = 1.0 + Math.sin(state.frameIndex * 0.16) * 0.03;
       }
 
-      // Render Goalkeeper in perspective
-      const gKP = project(gK.x, gK.y, gK.z, state.screenShake);
+      // ---- Pose params (computed before projection so we can add a leap arc) ----
+      const gkActive = state.gameState === 'BALL_FLIGHT' || state.gameState === 'SAVED' || state.gameState === 'CELEBRATION';
+      const dp = gkActive ? Math.min(1, Math.max(0, gK.diveProgress || 0)) : 0;
+      const dDir = gK.targetX > 0.1 ? 1 : (gK.targetX < -0.1 ? -1 : 0);
+      const dHigh = gK.targetY > 1.0;
+      // The keeper LEAPS: an arc that lifts the whole body off the ground mid-dive
+      const diveLift = dp > 0.02 ? Math.sin(Math.PI * dp) * (dDir !== 0 ? 0.5 : (dHigh ? 0.32 : 0.04)) : 0;
+
+      // Ground shadow stays on the pitch and shrinks as the keeper rises
+      const gkShadow = project(gK.x, 0, gK.z, state.screenShake);
+      if (gkShadow.ok) {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0.07, 0.22 - diveLift * 0.24);
+        ctx.fillStyle = '#000000';
+        ctx.beginPath();
+        ctx.ellipse(gkShadow.x, gkShadow.y, gkShadow.scale * 0.4 * (1 - diveLift * 0.45), gkShadow.scale * 0.08 * (1 - diveLift * 0.45), 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Render Goalkeeper in perspective (body lifted by the leap arc)
+      const gKP = project(gK.x, gK.y + diveLift, gK.z, state.screenShake);
       if (gKP.ok) {
+        const szG = gKP.scale * 1.8;
+
         ctx.save();
         ctx.translate(gKP.x, gKP.y);
         ctx.rotate(gK.angle);
+        // Gentle readiness bob when idle
+        const bob = gkActive ? 0 : Math.sin(state.frameIndex * 0.16) * szG * 0.015;
 
-        const szG = gKP.scale * 1.8;
+        const hipY = -szG * 0.42 + bob;
+        const shoulderY = -szG * 0.74 + bob;
+        const headY = -szG * 0.92 + bob;
 
-        // Goalkeeper Shadow
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
-        ctx.beginPath();
-        ctx.ellipse(0, 0, gKP.scale * 0.4, gKP.scale * 0.08, 0, 0, Math.PI * 2);
-        ctx.fill();
+        // Hand target positions (local space — the body rotation handles the lean)
+        let lHand: { x: number; y: number };
+        let rHand: { x: number; y: number };
+        if (dp > 0.02 && dDir !== 0) {
+          // Side dive: the lead arm (dive side) whips out (with a slight overshoot) then settles
+          const reach = szG * (0.5 + dp * 0.42 + Math.sin(Math.PI * Math.min(1, dp)) * 0.10);
+          const lift = dHigh ? -szG * (0.30 + dp * 0.34) : szG * 0.06; // up for high, forward/low for low
+          const lead = { x: dDir * reach, y: shoulderY + lift };
+          const trail = { x: -dDir * szG * 0.30, y: shoulderY + szG * 0.12 };
+          lHand = dDir < 0 ? lead : trail;
+          rHand = dDir < 0 ? trail : lead;
+        } else if (dp > 0.02) {
+          // Central reaction: high = catch overhead, low = smother down low
+          if (dHigh) {
+            lHand = { x: -szG * 0.26, y: shoulderY - szG * (0.30 + dp * 0.40) };
+            rHand = { x: szG * 0.26, y: shoulderY - szG * (0.30 + dp * 0.40) };
+          } else {
+            lHand = { x: -szG * 0.24, y: -szG * 0.05 };
+            rHand = { x: szG * 0.24, y: -szG * 0.05 };
+          }
+        } else {
+          // Idle ready stance: arms out, elbows bent, alert
+          const spread = szG * (0.34 + Math.sin(state.frameIndex * 0.16) * 0.02);
+          lHand = { x: -spread, y: -szG * 0.50 + bob };
+          rHand = { x: spread, y: -szG * 0.50 + bob };
+        }
 
-        // Legs
-        ctx.strokeStyle = '#1e293b'; // black shorts
+        // ---- Legs (drive into the dive / bent-knee ready) ----
+        ctx.strokeStyle = '#0f172a';
         ctx.lineWidth = szG * 0.12;
         ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
         ctx.beginPath();
-        ctx.moveTo(-szG * 0.08, -szG * 0.44);
-        ctx.lineTo(-szG * 0.12, -szG * 0.05);
-
-        ctx.moveTo(szG * 0.08, -szG * 0.44);
-        ctx.lineTo(szG * 0.12, -szG * 0.05);
-        ctx.stroke();
-
-        // Goalkeeper shirt: Custom neon jersey colors (contrast of opposing kits)
-        ctx.fillStyle = '#10b981'; // Neon Emerald/Lime Green goalie jersey
-        ctx.fillRect(-szG * 0.16, -szG * 0.8, szG * 0.32, szG * 0.38 * gK.scaleY);
-
-        // Bright goalkeeper yellow highlights
-        ctx.fillStyle = '#eab308';
-        ctx.fillRect(-szG * 0.04, -szG * 0.8, szG * 0.08, szG * 0.38 * gK.scaleY);
-
-        // Arms stretched out or diving reaching
-        ctx.strokeStyle = '#22d3ee'; // Sleeves
-        ctx.lineWidth = szG * 0.09;
-        ctx.beginPath();
-        if (state.gameState === 'BALL_FLIGHT' || state.gameState === 'SAVED') {
-          // block reach hands outstretched
-          ctx.moveTo(-szG * 0.16, -szG * 0.72);
-          ctx.lineTo(-szG * 0.48 * (1 + gK.diveProgress * 0.2), -szG * 0.82);
-
-          ctx.moveTo(szG * 0.16, -szG * 0.72);
-          ctx.lineTo(szG * 0.48 * (1 + gK.diveProgress * 0.2), -szG * 0.82);
+        if (dp > 0.02 && dDir !== 0) {
+          ctx.moveTo(0, hipY);
+          ctx.lineTo(dDir * szG * (0.10 + dp * 0.24), -szG * 0.03); // lead leg drives toward the dive
+          ctx.moveTo(0, hipY);
+          ctx.lineTo(-dDir * szG * 0.20, -szG * 0.02); // trailing leg
         } else {
-          // relaxed goalie pose
-          ctx.moveTo(-szG * 0.16, -szG * 0.72);
-          ctx.lineTo(-szG * 0.38, -szG * 0.52);
-
-          ctx.moveTo(szG * 0.16, -szG * 0.72);
-          ctx.lineTo(szG * 0.38, -szG * 0.52);
+          ctx.moveTo(-szG * 0.07, hipY);
+          ctx.lineTo(-szG * 0.13, -szG * 0.02);
+          ctx.moveTo(szG * 0.07, hipY);
+          ctx.lineTo(szG * 0.13, -szG * 0.02);
         }
         ctx.stroke();
 
-        // Big Goalie Gloves!
-        ctx.fillStyle = '#fb923c'; // Orange bright gloves
+        // ---- Torso / keeper jersey ----
+        const torsoTop = shoulderY;
+        const torsoH = (hipY - shoulderY) + szG * 0.07;
+        ctx.fillStyle = '#10b981'; // neon green keeper jersey
         ctx.beginPath();
-        if (state.gameState === 'BALL_FLIGHT' || state.gameState === 'SAVED') {
-          ctx.arc(-szG * 0.48, -szG * 0.82, szG * 0.065, 0, Math.PI * 2);
-          ctx.arc(szG * 0.48, -szG * 0.82, szG * 0.065, 0, Math.PI * 2);
+        if ((ctx as CanvasRenderingContext2D & { roundRect?: unknown }).roundRect) {
+          (ctx as CanvasRenderingContext2D).roundRect(-szG * 0.16, torsoTop, szG * 0.32, torsoH, szG * 0.05);
         } else {
-          ctx.arc(-szG * 0.38, -szG * 0.52, szG * 0.06, 0, Math.PI * 2);
-          ctx.arc(szG * 0.38, -szG * 0.52, szG * 0.06, 0, Math.PI * 2);
+          ctx.rect(-szG * 0.16, torsoTop, szG * 0.32, torsoH);
         }
         ctx.fill();
+        ctx.fillStyle = '#065f46'; // darker flank panels
+        ctx.fillRect(-szG * 0.16, torsoTop, szG * 0.045, torsoH);
+        ctx.fillRect(szG * 0.115, torsoTop, szG * 0.045, torsoH);
+        ctx.fillStyle = '#eab308'; // central accent stripe
+        ctx.fillRect(-szG * 0.022, torsoTop, szG * 0.044, torsoH);
 
-        // Head
-        ctx.fillStyle = '#fed7aa';
+        // ---- Arms (shoulder -> glove, with an elbow bend) ----
+        ctx.strokeStyle = '#0d9488'; // sleeves
+        ctx.lineWidth = szG * 0.085;
+        const drawArm = (hand: { x: number; y: number }) => {
+          const s = hand.x >= 0 ? 1 : -1;
+          const sx = s * szG * 0.15;
+          const ex = (sx + hand.x) / 2 + s * szG * 0.03;
+          const ey = (shoulderY + hand.y) / 2 + szG * 0.05;
+          ctx.beginPath();
+          ctx.moveTo(sx, shoulderY);
+          ctx.quadraticCurveTo(ex, ey, hand.x, hand.y);
+          ctx.stroke();
+        };
+        drawArm(lHand);
+        drawArm(rHand);
+
+        // ---- Gloves ----
+        const gloveR = szG * (dp > 0.02 ? 0.085 : 0.07);
+        ctx.fillStyle = '#fb923c'; // bright orange gloves
         ctx.beginPath();
-        ctx.arc(0, -szG * 0.88, szG * 0.095, 0, Math.PI * 2);
+        ctx.arc(lHand.x, lHand.y, gloveR, 0, Math.PI * 2);
+        ctx.arc(rHand.x, rHand.y, gloveR, 0, Math.PI * 2);
         ctx.fill();
-
-        // Cap or dark hair
-        ctx.fillStyle = gK.hairColor;
+        ctx.strokeStyle = '#c2410c';
+        ctx.lineWidth = szG * 0.012;
         ctx.beginPath();
-        ctx.arc(0, -szG * 0.92, szG * 0.095, Math.PI, 0);
+        ctx.arc(lHand.x, lHand.y, gloveR, 0, Math.PI * 2);
+        ctx.arc(rHand.x, rHand.y, gloveR, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // ---- Neck + Head ----
+        ctx.strokeStyle = '#fdba74';
+        ctx.lineWidth = szG * 0.05;
+        ctx.beginPath();
+        ctx.moveTo(0, shoulderY);
+        ctx.lineTo(0, headY + szG * 0.08);
+        ctx.stroke();
+
+        ctx.fillStyle = '#fed7aa'; // head
+        ctx.beginPath();
+        ctx.arc(0, headY, szG * 0.1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = gK.hairColor; // hair
+        ctx.beginPath();
+        ctx.arc(0, headY - szG * 0.02, szG * 0.1, Math.PI * 1.04, Math.PI * 1.96);
+        ctx.fill();
+        // Focused eyes tracking the dive direction
+        ctx.fillStyle = '#0f172a';
+        const eyeDX = dDir * szG * 0.02;
+        ctx.beginPath();
+        ctx.arc(-szG * 0.035 + eyeDX, headY - szG * 0.005, szG * 0.013, 0, Math.PI * 2);
+        ctx.arc(szG * 0.035 + eyeDX, headY - szG * 0.005, szG * 0.013, 0, Math.PI * 2);
         ctx.fill();
 
         ctx.restore();
@@ -1678,13 +1804,11 @@ export default function StadiumCanvas({
         // Curve bending math: Curve applies lateral air displacement over time (only during active flight)
         if (state.gameState === 'BALL_FLIGHT') {
           const currentCurve = state.isOpponentTurn ? state.aiCurve : state.curve;
-          const horizontalAirDrift = currentCurve * 0.0003; // reduced curve scale to prevent fictional guiding curves
-          b.vx += horizontalAirDrift;
+          b.vx += currentCurve * CURVE_DRIFT;
         }
 
-        // Gravity pull down over time matching the slower velocities
-        const realGravityTick = -0.0012; 
-        b.vy += realGravityTick;
+        // Gravity pull down over time (same constant used at launch => true parabola)
+        b.vy += BALL_GRAVITY;
 
         // Apply velocities
         b.x += b.vx;
@@ -1710,20 +1834,16 @@ export default function StadiumCanvas({
           const activeTeamGK = state.isOpponentTurn ? state.playerTeam : state.opponentTeam;
           const gkStats = GOALKEEPER_REGISTRY[activeTeamGK.id] || { name: 'Portero', reflejos: 90, alcance: 90 };
           
-          // Base glove span. Reach and Reflexes directly scale this span!
-          let goalieGloveSpan = 1.12 + ((gkStats.alcance - 85) / 10) * 0.12 + ((gkStats.reflejos - 85) / 10) * 0.08;
-          
-          // High power shots (>87) reduce the reach sweep slightly
-          if (state.power > 87) {
-            goalieGloveSpan -= 0.08;
-          }
-          // Deep top-corner shots require premium Reach to touch
-          if (Math.abs(b.x) > 3.0 && b.y > 1.8) {
-            if (gkStats.alcance < 91) {
-              goalieGloveSpan -= 0.12;
-            }
-          }
-          const distToGK = Math.sqrt(Math.pow(b.x - gK.x, 2) + Math.pow(b.y - gK.y, 2));
+          // Effective glove reach: how close the ball must pass to the keeper's hands
+          // (where it actually dove to) to be reachable. Scales with reach + reflexes.
+          let gloveRadius = 0.80 + ((gkStats.alcance - 85) / 14) * 0.22 + ((gkStats.reflejos - 85) / 14) * 0.12;
+          // Power blasts are harder to hold on to / react to
+          const shotPower = state.isOpponentTurn ? state.aiPower : state.power;
+          if (shotPower > 88) gloveRadius -= 0.10;
+          // Physical distance between the ball and the keeper's hands as it crosses the line.
+          // Because the keeper dove to a reach-limited spot (not onto the ball), a shot tucked
+          // into the corner naturally lands outside this radius => goal, even on a correct guess.
+          const distToGK = Math.hypot(b.x - gK.x, b.y - gK.y);
 
           // Post and top bar dimensions: Goals are widened [-4.5, 4.5], Y up to 2.8
           const isBetweenPosts = b.x >= -4.5 && b.x <= 4.5;
@@ -1741,7 +1861,7 @@ export default function StadiumCanvas({
             hitWoodwork: false,
             keeperDived: state.direction, // matches selection
             keeperHeight: state.height,
-            isPerfect: state.power >= 72 && state.power <= 88,
+            isPerfect: isSweetSpot(state.power),
             power: state.power,
             curve: state.curve,
             message: '',
@@ -1779,7 +1899,7 @@ export default function StadiumCanvas({
             result.isGoal = false;
             result.isSaved = false;
             result.isOffTarget = true;
-            result.message = 'WOODWORK! Frame clattered!';
+            result.message = '¡Tembló el caño! La pelota se fue tras pegar en el palo.';
             
             state.gameState = 'SAVED';
             if (!state.shotLogged) {
@@ -1789,7 +1909,7 @@ export default function StadiumCanvas({
             }
           } 
           // Check Goalkeeper block / Save states
-          else if (distToGK < goalieGloveSpan * 0.72 || (Math.abs(gK.targetX - b.x) < 0.35 && Math.abs(gK.targetY - b.y) < 0.35)) {
+          else if (distToGK < gloveRadius) {
             // SOLID CLEAN SAVE!
             audioEngine.playKick(0.38); // pop sound
             state.screenShake = 4.5;
@@ -1815,10 +1935,11 @@ export default function StadiumCanvas({
               state.onShotComplete(result);
             }
           } 
-          else if (distToGK < goalieGloveSpan * 1.25 || (Math.abs(gK.targetX - b.x) < 0.62 && Math.abs(gK.targetY - b.y) < 0.62)) {
+          else if (distToGK < gloveRadius + 0.45) {
             // "ROZAR Y DESVIAR" (Fingertip graze deflection!)
-            // 50% chance they tip it out of bounds, 50% chance they touch it but it still deflects inside the net!
-            const deflectsIn = Math.random() < 0.50;
+            // The closer the keeper's hand got, the more likely the touch keeps it out.
+            const closeness = Math.min(1, Math.max(0, (gloveRadius + 0.45 - distToGK) / 0.45));
+            const deflectsIn = Math.random() >= (0.35 + closeness * 0.45);
             state.screenShake = 3.0;
 
             if (deflectsIn) {
@@ -1889,7 +2010,11 @@ export default function StadiumCanvas({
             
             state.screenShake = 11.5;
             result.isGoal = true;
-            result.message = 'GOOOAAALLL!!! Pristine shot!';
+            result.message = (Math.abs(b.x) > 3.2 && b.y > 1.55)
+              ? 'Clavada en el ángulo, imposible para el arquero.'
+              : (Math.abs(b.x) > 3.0
+                  ? 'Pegada al palo, el arquero ni la vio.'
+                  : 'Definición perfecta, adentro.');
             
             // Indent the physical net mesh points close to contact
             state.netPoints.forEach(p => {
@@ -1936,7 +2061,7 @@ export default function StadiumCanvas({
           else {
             result.isOffTarget = true;
             result.isGoal = false;
-            result.message = b.y > 2.8 ? 'OUT OF BOUNDS! Over the crossbar!' : 'MISS! Wide of the goalpost!';
+            result.message = b.y > 2.8 ? '¡Por encima del travesaño! Se fue a las nubes.' : '¡Desviada! Pasó al lado del palo.';
             
             state.gameState = 'OUT_OF_BOUNDS';
             if (!state.shotLogged) {
@@ -1953,8 +2078,8 @@ export default function StadiumCanvas({
         }
       }
 
-      // 8. RENDER INTERACTIVE TARGET RETICLE AND TRAJECTORY PREVIEW (Only in PRE_SHOT)
-      if (state.gameState === 'PRE_SHOT' && state.aimTarget) {
+      // 8. RENDER INTERACTIVE TARGET RETICLE AND TRAJECTORY PREVIEW (only while the user is aiming a shot)
+      if (state.gameState === 'PRE_SHOT' && state.aimTarget && !state.isOpponentTurn) {
         // Draw the laser sweeps based on active 3-click steps
         ctx.save();
         if (aimingStepRef.current === 0) {
@@ -2134,41 +2259,38 @@ export default function StadiumCanvas({
         }
       }
 
-      // --- WORLD CUP 2026 TARGET ENTRY CURSOR ---
-      // Show when destination is available during player shot run up or ball flight (never on opponent turn)
-      if (state.hasFinalDest && !state.isOpponentTurn && (state.gameState === 'RUN_UP' || state.gameState === 'BALL_FLIGHT')) {
+      // --- TARGET MARKER: shows the ball's real destination on the goal line ---
+      // Shown for BOTH the player's shots and the opponent's (once the ball is on its
+      // way), and pinned to finalDest so the cursor and the ball always converge.
+      if ((state.gameState === 'RUN_UP' || state.gameState === 'BALL_FLIGHT') && state.hasFinalDest) {
         const destP = project(state.finalDestX, state.finalDestY, 0, state.screenShake);
         if (destP.ok) {
           ctx.save();
           ctx.translate(destP.x, destP.y);
 
-          const rBase = destP.scale * 0.35; // slightly smaller and crispier
+          const rBase = destP.scale * 0.34;
           const timePulse = Math.sin(state.frameIndex * 0.12) * 1.0;
           const finalR = rBase + timePulse;
 
-          // Clean, modern white target ring representing professional minimalist design
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)'; // external glow
+          ctx.strokeStyle = 'rgba(0, 229, 255, 0.30)'; // cyan glow = "your target"
           ctx.lineWidth = 4;
           ctx.beginPath();
           ctx.arc(0, 0, finalR + 2.0, 0, Math.PI * 2);
           ctx.stroke();
 
-          ctx.strokeStyle = '#ffffff'; // primary white container ring
+          ctx.strokeStyle = '#00E5FF';
           ctx.lineWidth = 2.0;
           ctx.beginPath();
           ctx.arc(0, 0, finalR, 0, Math.PI * 2);
           ctx.stroke();
 
-          // Central core target dot (pure high-contrast white)
           ctx.fillStyle = '#ffffff';
           ctx.beginPath();
-          ctx.arc(0, 0, destP.scale * 0.08, 0, Math.PI * 2);
+          ctx.arc(0, 0, destP.scale * 0.07, 0, Math.PI * 2);
           ctx.fill();
 
-          // Simple elegant clean crosshair subtle lines
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)';
+          ctx.strokeStyle = 'rgba(0, 229, 255, 0.7)';
           ctx.lineWidth = 1.2;
-          
           ctx.beginPath();
           ctx.moveTo(-finalR - 3, 0); ctx.lineTo(-finalR + 2, 0);
           ctx.moveTo(finalR - 2, 0); ctx.lineTo(finalR + 3, 0);
@@ -2268,109 +2390,12 @@ export default function StadiumCanvas({
         ctx.restore();
       }
 
-      // Draw Trophy Spotlight celebration in MATCH_OVER
+      // Darken the pitch behind the result overlay so the React UI reads clearly.
+      // All champion glamour now lives in the lightweight React overlay — no heavy
+      // canvas trophy behind the classify/defeat screens (fixes the overlap + lag).
       if (stateRef.current.gameState === 'MATCH_OVER') {
-        ctx.save();
-        // Darken background for maximum spotlight ambient contrast
-        ctx.fillStyle = 'rgba(2, 6, 23, 0.82)';
+        ctx.fillStyle = 'rgba(2, 6, 23, 0.78)';
         ctx.fillRect(0, 0, dimensions.width, dimensions.height);
-
-        // Rotating sunburst celebration beams
-        ctx.translate(dimensions.width / 2, dimensions.height * 0.48);
-        ctx.save();
-        ctx.rotate(state.frameIndex * 0.007);
-        for (let ray = 0; ray < 12; ray++) {
-          ctx.fillStyle = 'rgba(234, 179, 8, 0.08)';
-          ctx.beginPath();
-          ctx.moveTo(0, 0);
-          ctx.arc(0, 0, dimensions.width * 0.48, (ray * Math.PI * 2) / 12, (ray * Math.PI * 2 + 0.28) / 12);
-          ctx.closePath();
-          ctx.fill();
-        }
-        ctx.restore();
-
-        // Majestic spotlight cone
-        const baseGradient = ctx.createLinearGradient(0, -dimensions.height * 0.48, 0, dimensions.height * 0.36);
-        baseGradient.addColorStop(0, 'rgba(255, 255, 255, 0.02)');
-        baseGradient.addColorStop(0.7, 'rgba(253, 224, 71, 0.16)');
-        baseGradient.addColorStop(1, 'rgba(253, 224, 71, 0.32)');
-        ctx.fillStyle = baseGradient;
-        ctx.beginPath();
-        ctx.moveTo(0, -dimensions.height * 0.48);
-        ctx.lineTo(-dimensions.width * 0.18, dimensions.height * 0.22);
-        ctx.lineTo(dimensions.width * 0.18, dimensions.height * 0.22);
-        ctx.closePath();
-        ctx.fill();
-
-        // 3D-styled Solid World Cup Gold Trophy cup!
-        ctx.save();
-        const basePulse = Math.sin(state.frameIndex * 0.06) * 11;
-        ctx.translate(0, -18 + basePulse);
-
-        // Sparkle stars around trophy
-        for (let sp = 0; sp < 8; sp++) {
-          const spAngle = (sp * Math.PI * 2) / 8 + state.frameIndex * 0.05;
-          const sx = Math.sin(spAngle) * 60;
-          const sy = Math.cos(spAngle) * 50 - 30;
-          const sSize = Math.max(0, 3 + Math.sin(state.frameIndex * 0.14 + sp) * 4);
-          ctx.fillStyle = '#ffffff';
-          ctx.beginPath();
-          ctx.arc(sx, sy, sSize * 0.6, 0, Math.PI * 2);
-          ctx.fill();
-        }
-
-        // 1. Draw Trophy Base (Emerald Malachite rings on gold)
-        ctx.fillStyle = '#854d0e'; // Golden Bronze base
-        ctx.fillRect(-38, 48, 76, 12);
-        // Green Malachite stripes
-        ctx.fillStyle = '#064e3b';
-        ctx.fillRect(-34, 51, 68, 3);
-        ctx.fillRect(-34, 56, 68, 3);
-
-        ctx.fillStyle = '#ca8a04'; // Gold Base
-        ctx.fillRect(-28, 28, 56, 20);
-
-        // 2. Draw Trophy body holding globe (Winding figures holding the world cup)
-        ctx.beginPath();
-        ctx.moveTo(-16, 28);
-        ctx.bezierCurveTo(-24, 0, -28, -25, -22, -35); // Left supportive arm
-        ctx.lineTo(22, -35);
-        ctx.bezierCurveTo(28, -25, 24, 0, 16, 28);
-        ctx.closePath();
-        const goldGrad = ctx.createRadialGradient(-5, -12, 10, 0, 0, 38);
-        goldGrad.addColorStop(0, '#fef08a'); // shiny bright highlights
-        goldGrad.addColorStop(0.5, '#eab308'); // gold
-        goldGrad.addColorStop(1, '#854d0e'); // bronze
-        ctx.fillStyle = goldGrad;
-        ctx.fill();
-
-        // 3. Central Supportive details
-        ctx.fillStyle = '#ca8a04';
-        ctx.beginPath();
-        ctx.ellipse(0, 4, 11, 24, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // 4. Draw the Golden Globe sphere at the top top!
-        ctx.beginPath();
-        ctx.arc(0, -38, 28, 0, Math.PI * 2);
-        const globeGrad = ctx.createRadialGradient(-8, -46, 5, 0, -38, 28);
-        globeGrad.addColorStop(0, '#ffffff');
-        globeGrad.addColorStop(0.35, '#fef08a');
-        globeGrad.addColorStop(0.85, '#ca8a04');
-        globeGrad.addColorStop(1, '#713f12');
-        ctx.fillStyle = globeGrad;
-        ctx.fill();
-
-        // 5. Embossed continents details on globe
-        ctx.strokeStyle = '#ca8a04';
-        ctx.lineWidth = 2.5;
-        ctx.beginPath();
-        // Latitude bands
-        ctx.arc(0, -38, 28, -Math.PI/6, Math.PI + Math.PI/6);
-        ctx.stroke();
-
-        ctx.restore();
-        ctx.restore();
       }
 
       // Decelerate continuous screen shake
@@ -2413,6 +2438,9 @@ export default function StadiumCanvas({
       state.keeper.angle = 0;
       state.keeper.diveProgress = 0;
       state.keeper.diveDelay = 0;
+      state.keeper.tookOff = false;
+      state.keeper.landed = false;
+      state.keeperTrail = [];
       state.shotLogged = false;
       state.screenShake = 0;
       state.particles = [];
@@ -2641,6 +2669,16 @@ export default function StadiumCanvas({
           </div>
 
         </div>
+
+        {/* Knockout stage banner */}
+        {stageName && gameState !== 'MATCH_OVER' && (
+          <div className="mt-1 flex items-center gap-1.5 bg-black/50 border border-yellow-500/30 px-3 py-0.5 rounded-full pointer-events-none">
+            <Trophy className="w-3 h-3 text-yellow-400" />
+            <span className="text-[9px] md:text-[10px] font-mono font-black tracking-[0.25em] text-yellow-300/90 uppercase">
+              {stageName}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Floating Corner HUD Navigation & Audio System Triggers */}
@@ -2677,6 +2715,31 @@ export default function StadiumCanvas({
           {!isOpponentTurn ? (
             // Striper's Shot lasers locked panel
             <>
+              {/* Curve selector — same immersive style as the keeper dive buttons */}
+              {aimingStep < 2 && (
+                <div className="grid grid-cols-3 gap-6 w-[300px] md:w-[380px] mb-1 select-none text-center justify-between items-center">
+                  {([
+                    { arrow: '↰', label: 'COMBA IZQ', val: -7 },
+                    { arrow: '↑', label: 'RECTO', val: 0 },
+                    { arrow: '↱', label: 'COMBA DER', val: 7 },
+                  ] as const).map((opt) => {
+                    const active = opt.val === 0 ? curve === 0 : (opt.val < 0 ? curve < 0 : curve > 0);
+                    return (
+                      <button
+                        key={opt.label}
+                        onClick={() => setCurve && setCurve(opt.val)}
+                        className={`bg-transparent border-none font-sans font-black text-[11px] md:text-sm uppercase tracking-widest transition-all text-center cursor-pointer drop-shadow-[0_4px_8px_rgba(0,0,0,0.95)] flex flex-col items-center gap-0.5 ${
+                          active ? 'text-[#00E5FF] scale-110' : 'text-white/70 hover:text-white hover:scale-105'
+                        }`}
+                      >
+                        <span className={`text-xl md:text-2xl font-black ${active ? 'text-[#00E5FF]' : 'text-white/60'}`}>{opt.arrow}</span>
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               <div className="flex items-center gap-1.5 text-center drop-shadow-[0_2px_4px_rgba(0,0,0,0.95)]">
                 <span className="w-2 h-2 rounded-full bg-[#00E5FF] animate-pulse" />
                 <span className="text-[10px] font-sans font-black tracking-widest text-[#00E5FF] uppercase">
@@ -2735,84 +2798,171 @@ export default function StadiumCanvas({
         </div>
       )}
 
-      {/* 5. MATCH ROUND REVISION / SUMMARY OVERLAYS CARD */}
-      {gameState !== 'PRE_SHOT' && gameState !== 'RUN_UP' && gameState !== 'KICK' && (
+      {/* 5. MATCH ROUND REVISION / SUMMARY OVERLAYS CARD (only after the ball is resolved) */}
+      {gameState !== 'PRE_SHOT' && gameState !== 'RUN_UP' && gameState !== 'KICK' && gameState !== 'BALL_FLIGHT' && (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-transparent pointer-events-auto p-6 select-none animate-fade-in">
           {gameState === 'MATCH_OVER' ? (
             <div className="flex flex-col items-center justify-center gap-6 select-none animate-scale-up max-w-sm w-full filter drop-shadow-[0_4px_16px_rgba(0,0,0,0.95)]">
               {score > opponentScore ? (
-                // CHAMPION CONCISE VIEW
-                <div className="flex flex-col items-center gap-4 bg-black/75 backdrop-blur-md border border-white/10 p-8 rounded-3xl w-full text-center shadow-2xl relative overflow-hidden">
-                  <div className="w-12 h-12 bg-yellow-500/10 border border-yellow-500/30 rounded-full flex items-center justify-center text-yellow-400">
-                    <Trophy className="w-6 h-6 animate-pulse" />
+                stageIndex >= totalStages - 1 ? (
+                // CHAMPION — big shiny animated trophy, clean & elegant
+                <div className="relative flex flex-col items-center text-center wc-pop">
+                  {/* Pulsing golden glow halo */}
+                  <div className="absolute -z-10 w-[440px] h-[440px] max-w-[90vw] rounded-full bg-[radial-gradient(circle,rgba(255,200,60,0.30),transparent_62%)] wc-glow" />
+
+                  {/* Floating trophy with a sweeping shine */}
+                  <div className="wc-float">
+                    <div className="wc-shine-wrap inline-block rounded-xl drop-shadow-[0_10px_34px_rgba(255,190,40,0.55)]">
+                      <svg viewBox="0 0 120 150" className="w-32 h-40 md:w-40 md:h-52">
+                        <defs>
+                          <linearGradient id="wcGold" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0" stopColor="#fff6c8" />
+                            <stop offset="0.32" stopColor="#ffd84d" />
+                            <stop offset="0.62" stopColor="#f5a623" />
+                            <stop offset="1" stopColor="#b8791b" />
+                          </linearGradient>
+                        </defs>
+                        <path d="M30 18 H90 V40 Q90 80 60 92 Q30 80 30 40 Z" fill="url(#wcGold)" />
+                        <path d="M30 26 Q10 28 15 50 Q20 66 35 60" fill="none" stroke="url(#wcGold)" strokeWidth="6" strokeLinecap="round" />
+                        <path d="M90 26 Q110 28 105 50 Q100 66 85 60" fill="none" stroke="url(#wcGold)" strokeWidth="6" strokeLinecap="round" />
+                        <rect x="54" y="92" width="12" height="20" fill="url(#wcGold)" />
+                        <rect x="38" y="112" width="44" height="9" rx="3" fill="url(#wcGold)" />
+                        <rect x="31" y="121" width="58" height="15" rx="4" fill="url(#wcGold)" />
+                        <ellipse cx="47" cy="42" rx="5" ry="16" fill="#ffffff" opacity="0.45" />
+                      </svg>
+                    </div>
                   </div>
-                  <div>
-                    <span className="text-[10px] font-mono font-black tracking-widest text-yellow-400 uppercase bg-yellow-500/10 border border-yellow-500/20 px-3 py-1 rounded-full">
-                      ¡GANAS LA COPA MUNDIAL!
+
+                  <span className="mt-3 text-[11px] font-mono font-black tracking-[0.3em] text-yellow-300/90 uppercase wc-fade-in">
+                    Copa Mundial 2026
+                  </span>
+                  <h1 className="mt-1 text-4xl md:text-6xl font-display font-black uppercase tracking-wide bg-gradient-to-b from-yellow-100 via-yellow-300 to-amber-500 bg-clip-text text-transparent drop-shadow-[0_4px_14px_rgba(0,0,0,0.7)]">
+                    Campeón del Mundo
+                  </h1>
+
+                  <div className="mt-4 flex items-center gap-3 wc-rise">
+                    <FlagBadge teamId={playerTeam.id} className="w-11 h-7 rounded shadow-lg border border-white/25" />
+                    <span className="text-xl md:text-3xl font-display font-black text-white tracking-wide">
+                      {playerTeam.name.toUpperCase()}
                     </span>
-                    <h2 className="text-3xl font-display font-black text-white mt-3 tracking-wide uppercase">
-                      ¡CAMPEÓN DEL MUNDO!
-                    </h2>
-                    <p className="text-xs text-slate-300 leading-relaxed mt-2.5 px-2 font-medium">
-                      Has coronado a <strong className="text-yellow-400 font-extrabold">{playerTeam.name.toUpperCase()}</strong> como el rey absoluto. ¡Una actuación legendaria!
-                    </p>
                   </div>
 
                   <button
                     onClick={onExitSelection}
-                    className="mt-4 w-full py-3.5 px-6 bg-gradient-to-r from-[#1e3a8a] to-[#00E5FF] hover:from-[#111827] hover:to-[#00FF87] text-white transition-all duration-300 font-display font-black text-xs uppercase tracking-widest rounded-full shadow-[0_4px_16px_rgba(0,229,255,0.3)] hover:shadow-[0_4px_28px_rgba(0,255,135,0.4)] active:scale-95 flex items-center justify-center gap-2 cursor-pointer font-extrabold border border-white/10"
+                    className="mt-8 py-3.5 px-10 bg-gradient-to-r from-yellow-400 to-amber-500 hover:from-yellow-300 hover:to-amber-400 text-slate-950 transition-all duration-300 font-display font-black text-xs uppercase tracking-widest rounded-full shadow-[0_6px_24px_rgba(255,190,40,0.4)] hover:shadow-[0_6px_34px_rgba(255,190,40,0.6)] active:scale-95 flex items-center justify-center gap-2 cursor-pointer wc-rise"
                   >
-                    <RotateCcw className="w-4 h-4 text-white" /> JUGAR OTRA VEZ
+                    <RotateCcw className="w-4 h-4" /> Jugar de nuevo
                   </button>
                 </div>
-              ) : (
-                // DEFEAT CONCISE VIEW
-                <div className="flex flex-col items-center gap-4 bg-black/75 backdrop-blur-md border border-white/10 p-8 rounded-3xl w-full text-center shadow-2xl relative overflow-hidden">
-                  <div className="w-12 h-12 bg-rose-500/10 border border-rose-500/30 rounded-full flex items-center justify-center text-rose-400">
-                    <Info className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <span className="text-[10px] font-mono font-black tracking-widest text-rose-400 bg-rose-950/20 border border-rose-800/40 px-3 py-1 rounded-full uppercase">
-                      FIN DEL TORNEO
-                    </span>
-                    <h2 className="text-3xl font-display font-black text-slate-100 mt-3 tracking-wide uppercase">
-                      FIN DE LA AVENTURA
-                    </h2>
-                    <p className="text-xs text-slate-300 leading-relaxed mt-2.5 px-2 font-medium">
-                      <strong className="text-white font-extrabold">{playerTeam.name.toUpperCase()}</strong> dio pelea hasta la última instancia pero cayó ante <strong className="text-white font-extrabold">{opponentTeam.name.toUpperCase()}</strong>.
-                    </p>
+                ) : (
+                // ADVANCED — classified to the next knockout round
+                <div className="relative flex flex-col items-center text-center wc-pop max-w-md px-2">
+                  <div className="absolute -z-10 w-[420px] h-[420px] max-w-[90vw] rounded-full bg-[radial-gradient(circle,rgba(0,255,135,0.16),transparent_62%)] wc-glow" />
+
+                  <span className="text-[11px] font-mono font-black tracking-[0.3em] text-[#00FF87] uppercase wc-fade-in">Clasificado</span>
+                  <h1 className="mt-1 text-3xl md:text-5xl font-display font-black uppercase tracking-wide text-white drop-shadow-[0_4px_14px_rgba(0,0,0,0.7)]">
+                    ¡A {TOURNAMENT_STAGES[Math.min(stageIndex + 1, totalStages - 1)]}!
+                  </h1>
+
+                  {/* Bracket progress */}
+                  <div className="mt-5 flex items-center gap-1.5 md:gap-2.5 wc-rise">
+                    {(['Octavos', 'Cuartos', 'Semi', 'Final'] as const).map((label, i) => {
+                      const done = i <= stageIndex;
+                      const next = i === stageIndex + 1;
+                      return (
+                        <React.Fragment key={label}>
+                          <div className="flex flex-col items-center gap-1">
+                            <div className={`w-7 h-7 md:w-8 md:h-8 rounded-full border-2 flex items-center justify-center text-[11px] font-black transition ${
+                              done ? 'bg-[#00FF87] border-[#00FF87] text-slate-950 shadow-[0_0_10px_rgba(0,255,135,0.5)]'
+                              : next ? 'border-[#00E5FF] text-[#00E5FF] animate-pulse'
+                              : 'border-white/15 text-white/30'}`}>
+                              {done ? '✓' : i + 1}
+                            </div>
+                            <span className={`text-[8px] md:text-[9px] font-mono uppercase tracking-wider ${done ? 'text-[#00FF87]' : next ? 'text-[#00E5FF]' : 'text-white/30'}`}>{label}</span>
+                          </div>
+                          {i < 3 && <div className={`w-4 md:w-7 h-0.5 rounded ${i < stageIndex ? 'bg-[#00FF87]' : 'bg-white/10'}`} />}
+                        </React.Fragment>
+                      );
+                    })}
                   </div>
 
+                  {/* Next opponent */}
+                  {nextOpponent && (
+                    <div className="mt-6 flex flex-col items-center gap-1.5 wc-rise">
+                      <span className="text-[10px] font-mono uppercase tracking-widest text-slate-400">Próximo rival</span>
+                      <div className="flex items-center gap-3">
+                        <FlagBadge teamId={nextOpponent.id} className="w-10 h-7 rounded shadow-lg border border-white/20" />
+                        <span className="text-lg md:text-2xl font-display font-black text-white tracking-wide">{nextOpponent.name.toUpperCase()}</span>
+                      </div>
+                      <span className="text-[11px] font-mono text-[#00E5FF]">Arquero: {GOALKEEPER_REGISTRY[nextOpponent.id]?.name || 'Portero'}</span>
+                    </div>
+                  )}
+
+                  <button
+                    onClick={onAdvance}
+                    className="mt-7 py-3.5 px-10 bg-gradient-to-r from-[#00FF87] to-[#00E5FF] hover:from-[#00E5FF] hover:to-[#00FF87] text-slate-950 transition-all duration-300 font-display font-black text-xs uppercase tracking-widest rounded-full shadow-[0_6px_24px_rgba(0,255,135,0.35)] active:scale-95 flex items-center justify-center gap-2 cursor-pointer wc-rise"
+                  >
+                    Siguiente partido →
+                  </button>
+                </div>
+                )
+              ) : (
+                // DEFEAT — clean text + button, no card / no background
+                <div className="flex flex-col items-center text-center gap-4 wc-pop">
+                  <span className="text-[11px] font-mono font-black tracking-[0.3em] text-rose-400 uppercase">Fin del torneo</span>
+                  <h1 className="text-4xl md:text-6xl font-display font-black uppercase tracking-wide text-white drop-shadow-[0_4px_16px_rgba(0,0,0,0.85)]">
+                    Quedaste eliminado
+                  </h1>
+                  <p className="text-sm md:text-base text-white/80 max-w-md drop-shadow-[0_2px_6px_rgba(0,0,0,0.9)]">
+                    <strong className="text-white font-extrabold">{playerTeam.name.toUpperCase()}</strong> cayó ante <strong className="text-white font-extrabold">{opponentTeam.name.toUpperCase()}</strong>.
+                  </p>
                   <button
                     onClick={onExitSelection}
-                    className="mt-4 w-full py-3.5 px-6 bg-gradient-to-r from-[#1e3a8a] to-[#00E5FF] hover:from-[#111827] hover:to-[#00FF87] text-white transition-all duration-300 font-display font-black text-xs uppercase tracking-widest rounded-full shadow-[0_4px_16px_rgba(0,229,255,0.3)] hover:shadow-[0_4px_28px_rgba(0,255,135,0.4)] active:scale-95 flex items-center justify-center gap-2 cursor-pointer font-extrabold border border-white/10"
+                    className="mt-3 py-3.5 px-10 bg-gradient-to-r from-[#1e3a8a] to-[#00E5FF] hover:from-[#111827] hover:to-[#00FF87] text-white transition-all duration-300 font-display font-black text-xs uppercase tracking-widest rounded-full shadow-[0_4px_18px_rgba(0,229,255,0.3)] active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    <RotateCcw className="w-4 h-4 text-white" /> INTENTAR DE NUEVO
+                    <RotateCcw className="w-4 h-4" /> Volver a jugar
                   </button>
                 </div>
               )}
             </div>
           ) : (
-            <div className="text-center flex flex-col items-center gap-6 animate-scale-up">
-              <div className="flex flex-col items-center gap-1.5">
-                <h1 className="text-5xl md:text-7xl font-display font-black uppercase tracking-wider drop-shadow-[0_8px_16px_rgba(0,0,0,0.95)]">
-                  {gameState === 'CELEBRATION' && (
-                    <span className="bg-gradient-to-r from-[#1e3a8a] to-[#00E5FF] bg-clip-text text-transparent animate-pulse animate-duration-1000">
-                      {isOpponentTurn ? `GOL DE ${opponentTeam.name.toUpperCase()}` : '¡GOLAZOOO!'}
-                    </span>
-                  )}
-                  {gameState === 'SAVED' && (
-                    <span className="bg-gradient-to-r from-[#1e3a8a] to-[#00E5FF] bg-clip-text text-transparent">
-                      {isOpponentTurn ? '¡ATAJADA HEROICA!' : '¡TIRO SALVADO!'}
-                    </span>
-                  )}
-                  {gameState === 'OUT_OF_BOUNDS' && (
-                    <span className="bg-gradient-to-r from-[#CE080E] to-[#1e3a8a] bg-clip-text text-transparent">
-                      {isOpponentTurn ? '¡TIRO DESVIADO DEL RIVAL!' : '¡TIRO DESVIADO!'}
-                    </span>
-                  )}
-                </h1>
-              </div>
+            <div className="text-center flex flex-col items-center gap-5 animate-scale-up">
+              {(() => {
+                // Last resolved kick of whoever just shot — drives a context-aware headline + commentary line
+                const lastShot = isOpponentTurn ? opponentHistory[opponentHistory.length - 1] : shotHistory[shotHistory.length - 1];
+                const fp = lastShot?.ballFinalPos;
+                const isTopBins = !!fp && Math.abs(fp.x) > 3.2 && fp.y > 1.55; // tucked into the angle
+                const hitWood = !!lastShot?.hitWoodwork;
+
+                let headline = '';
+                let gradient = 'from-[#1e3a8a] to-[#00E5FF]';
+                if (gameState === 'CELEBRATION') {
+                  if (isOpponentTurn) { headline = `GOL DE ${opponentTeam.name.toUpperCase()}`; gradient = 'from-rose-500 to-[#1e3a8a]'; }
+                  else { headline = isTopBins ? '¡GOLAZO AL ÁNGULO!' : '¡GOLAZOOO!'; gradient = 'from-[#00FF87] to-[#00E5FF]'; }
+                } else if (gameState === 'SAVED') {
+                  if (hitWood) { headline = '¡AL PALO!'; gradient = 'from-amber-400 to-[#00E5FF]'; }
+                  else if (isOpponentTurn) { headline = '¡ATAJADÓN!'; gradient = 'from-[#00FF87] to-[#00E5FF]'; } // you saved it
+                  else { headline = '¡TIRO ATAJADO!'; gradient = 'from-slate-300 to-[#1e3a8a]'; } // your shot stopped
+                } else if (gameState === 'OUT_OF_BOUNDS') {
+                  gradient = 'from-[#CE080E] to-[#1e3a8a]';
+                  headline = isOpponentTurn ? '¡AFUERA! ERRÓ EL RIVAL' : '¡LA MANDASTE AFUERA!';
+                }
+
+                return (
+                  <div className="flex flex-col items-center gap-2">
+                    <h1 className="text-5xl md:text-7xl font-display font-black uppercase tracking-wider drop-shadow-[0_8px_16px_rgba(0,0,0,0.95)]">
+                      <span className={`bg-gradient-to-r ${gradient} bg-clip-text text-transparent ${gameState === 'CELEBRATION' ? 'animate-pulse animate-duration-1000' : ''}`}>
+                        {headline}
+                      </span>
+                    </h1>
+                    {lastShot?.message && (
+                      <p className="text-sm md:text-base font-semibold text-white/85 max-w-md drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)]">
+                        {lastShot.message}
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
 
               <button
                 onClick={onResetMatch}

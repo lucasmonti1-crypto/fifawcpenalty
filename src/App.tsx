@@ -1,8 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Team, GameState, ShotDirection, ShotHeight, ShotResult, TEAMS } from './types';
+import { Team, GameState, ShotDirection, ShotHeight, ShotResult, TEAMS, TOURNAMENT_STAGES } from './types';
 import TeamSelector from './components/TeamSelector';
 import StadiumCanvas from './components/StadiumCanvas';
-import GameUI from './components/GameUI';
 import { audioEngine } from './components/AudioEngine';
 import { Trophy, HelpCircle, Gamepad2, Info, Star } from 'lucide-react';
 
@@ -26,6 +25,19 @@ export default function App() {
   const [curve, setCurve] = useState(0);
 
   const [currentShotNum, setCurrentShotNum] = useState(1); // Standard Round: 1 to 5+
+
+  // Knockout tournament progression (Octavos -> Cuartos -> Semi -> Final -> Champion)
+  const [stageIndex, setStageIndex] = useState(0);
+  const [facedIds, setFacedIds] = useState<string[]>([]);
+  const [nextOpponent, setNextOpponent] = useState<Team | null>(null);
+  const totalStages = TOURNAMENT_STAGES.length;
+
+  // Pick a random team not yet faced and not the player's
+  const drawOpponent = (): Team => {
+    const pool = TEAMS.filter(t => t.id !== playerTeam.id && !facedIds.includes(t.id));
+    const list = pool.length > 0 ? pool : TEAMS.filter(t => t.id !== playerTeam.id);
+    return list[Math.floor(Math.random() * list.length)];
+  };
 
   // A ref to store the latest values of crucial score/turn states to avoid React's stale closure problems during fast canvas ticks
   const latestStateRef = useRef({
@@ -58,17 +70,23 @@ export default function App() {
     }
   }, [gameState]);
 
-  // Play epic celebratory or tragic defeat music on match completion
+  // On match completion: advance the bracket, crown a champion, or get eliminated
   useEffect(() => {
-    if (gameState === 'MATCH_OVER') {
-      const userWon = score > opponentScore;
-      if (userWon) {
-        audioEngine.playVictoryMusic();
-      } else {
-        audioEngine.playDefeatMusic();
-      }
+    if (gameState !== 'MATCH_OVER') return;
+    const userWon = score > opponentScore;
+    const isFinal = stageIndex >= totalStages - 1;
+
+    if (userWon && !isFinal) {
+      // Advance: line up the next rival (shown on the "classified" screen)
+      if (!nextOpponent) setNextOpponent(drawOpponent());
+      audioEngine.playCheer();
+    } else if (userWon && isFinal) {
+      audioEngine.playVictoryMusic();
+    } else {
+      audioEngine.playDefeatMusic();
     }
-  }, [gameState, score, opponentScore]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameState, score, opponentScore, stageIndex]);
 
   // Initialize and unlock audio context upon first meaningful user screen gesture
   const handleTeamSelected = (yourTeam: Team, defenderTeam: Team) => {
@@ -79,7 +97,11 @@ export default function App() {
     audioEngine.init();
     audioEngine.playWhistle();
 
-    // Begin match
+    // Begin tournament — the chosen rival is your Round-of-16 opponent
+    setStageIndex(0);
+    setFacedIds([defenderTeam.id]);
+    setNextOpponent(null);
+
     setScore(0);
     setOpponentScore(0);
     setShotHistory([]);
@@ -215,6 +237,28 @@ export default function App() {
     }
   };
 
+  // Advance to the next knockout round against a fresh opponent
+  const handleAdvance = () => {
+    const opp = nextOpponent || drawOpponent();
+    setOpponentTeam(opp);
+    setFacedIds(prev => [...prev, opp.id]);
+    setNextOpponent(null);
+    setStageIndex(prev => prev + 1);
+
+    // Fresh shootout for the new tie
+    setScore(0);
+    setOpponentScore(0);
+    setShotHistory([]);
+    setOpponentHistory([]);
+    setCurrentShotNum(1);
+    setIsOpponentTurn(false);
+
+    audioEngine.stopMusic();
+    audioEngine.init();
+    audioEngine.playWhistle();
+    setGameState('PRE_SHOT');
+  };
+
   const handleRestartMatch = () => {
     // Reset all gameplay variables to fully start the penalty shootout from scratch!
     setScore(0);
@@ -292,6 +336,11 @@ export default function App() {
               onResetMatch={handleNextTurn}
               onRestartMatch={handleRestartMatch}
               onExitSelection={handleExitSelection}
+              stageIndex={stageIndex}
+              totalStages={totalStages}
+              stageName={TOURNAMENT_STAGES[stageIndex]}
+              nextOpponent={nextOpponent}
+              onAdvance={handleAdvance}
             />
           </div>
         )}

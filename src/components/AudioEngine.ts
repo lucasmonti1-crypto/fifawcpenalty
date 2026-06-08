@@ -6,64 +6,59 @@ class AudioEngine {
   private gainHum: GainNode | null = null;
 
   private shouldPlayIntro = false;
+  private introEl: HTMLAudioElement | null = null; // the real WC2026 anthem (mp3)
+  private unlockAttached = false;
 
   public init() {
-    if (this.ctx) {
-      if (this.ctx.state === 'suspended') {
-        this.ctx.resume().then(() => {
-          if (!this.humSource) {
-            this.startAmbientHum();
-          }
-          if (this.shouldPlayIntro && !this.musicSource) {
-            this.playIntroMusic();
-          }
-        });
+    if (!this.ctx) {
+      try {
+        this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      } catch (e) {
+        console.warn('Audio Context not supported in this browser', e);
       }
-      return;
     }
-    try {
-      this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      
-      // Automatic unblock on any standard user interaction
-      const unlock = () => {
-        if (this.ctx && this.ctx.state === 'suspended') {
-          this.ctx.resume().then(() => {
-            if (!this.humSource) {
-              this.startAmbientHum();
-            }
-            if (this.shouldPlayIntro && !this.musicSource) {
-              this.playIntroMusic();
-            }
-          });
-        }
-        document.removeEventListener('click', unlock);
-        document.removeEventListener('keydown', unlock);
-        document.removeEventListener('pointerdown', unlock);
-      };
-      
-      document.addEventListener('click', unlock);
-      document.addEventListener('keydown', unlock);
-      document.addEventListener('pointerdown', unlock);
+    // Browsers block audio until a user gesture. Attach a persistent unlock that
+    // resumes the context AND (re)starts whatever should be playing on EVERY
+    // interaction — robust against missed first-gestures. Cheap when already running.
+    this.attachUnlock();
+    this.resumeAll();
+  }
 
-      this.startAmbientHum();
-    } catch (e) {
-      console.warn('Audio Context not supported in this browser', e);
+  // Persistent unlock — never self-removes, so audio always recovers on any tap/click/key.
+  private attachUnlock() {
+    if (this.unlockAttached || typeof document === 'undefined') return;
+    this.unlockAttached = true;
+    const handler = () => this.resumeAll();
+    document.addEventListener('pointerdown', handler);
+    document.addEventListener('click', handler);
+    document.addEventListener('keydown', handler);
+    document.addEventListener('touchstart', handler, { passive: true });
+  }
+
+  // Make sure the audio context is running and the right tracks are playing.
+  private resumeAll() {
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume().catch(() => {});
+    }
+    if (this.isMuted) return;
+    if (!this.humSource) this.startAmbientHum();
+    if (this.shouldPlayIntro && this.introEl && this.introEl.paused) {
+      this.introEl.play().catch(() => {});
     }
   }
 
   public setMute(muted: boolean) {
     this.isMuted = muted;
-    if (this.ctx) {
-      if (this.isMuted) {
-        this.gainHum?.gain.setValueAtTime(0, this.ctx.currentTime);
-        this.stopMusic();
+    if (this.isMuted) {
+      if (this.ctx) this.gainHum?.gain.setValueAtTime(0, this.ctx.currentTime);
+      // Pause the anthem WITHOUT clearing shouldPlayIntro so unmute can resume it
+      if (this.introEl) this.introEl.pause();
+    } else {
+      if (this.ctx) this.gainHum?.gain.setValueAtTime(0.065, this.ctx.currentTime);
+      if (this.shouldPlayIntro && this.introEl) {
+        this.introEl.play().catch(() => {});
       } else {
-        this.gainHum?.gain.setValueAtTime(0.065, this.ctx.currentTime);
-        if (this.shouldPlayIntro) {
-          this.playIntroMusic();
-        } else {
-          this.startAmbientHum();
-        }
+        this.startAmbientHum();
       }
     }
   }
@@ -539,127 +534,28 @@ class AudioEngine {
   private musicGain: GainNode | null = null;
 
   public playIntroMusic() {
-    this.init();
     this.shouldPlayIntro = true;
-    if (!this.ctx || this.isMuted) return;
-    if (this.ctx.state === 'suspended') {
-      return; // Wait for document gesture unlock to trigger it
+    this.init(); // ensures ctx + persistent unlock listeners are attached
+
+    // The real WC2026 anthem plays through a plain <audio> element — the most
+    // reliable way to play an mp3 and let the browser handle buffering/looping.
+    if (!this.introEl) {
+      this.introEl = new Audio('/INTRO.mp3');
+      this.introEl.loop = true;
+      this.introEl.volume = 0.6;
+      this.introEl.preload = 'auto';
     }
-    this.stopMusic();
-
-    const now = this.ctx.currentTime;
-
-    // Fast asynchronous attempt to load the actual INTRO.mp3 upload from client paths
-    const tryLoadRealMp3 = async () => {
-      if (!this.ctx) return false;
-      const possibleURLs = ['/INTRO.mp3', 'INTRO.mp3', '/assets/INTRO.mp3'];
-      for (const url of possibleURLs) {
-        try {
-          const res = await fetch(url);
-          if (!res.ok) continue;
-          const arrayBuf = await res.arrayBuffer();
-          // Decode audio binary in the context
-          const audioBuf = await this.ctx.decodeAudioData(arrayBuf);
-          
-          if (!this.shouldPlayIntro || this.isMuted) return true; // User stopped or muted in the meantime
-          
-          this.stopMusic();
-          this.musicSource = this.ctx.createBufferSource();
-          this.musicSource.buffer = audioBuf;
-          this.musicSource.loop = true;
-          this.musicGain = this.ctx.createGain();
-          this.musicGain.gain.setValueAtTime(0.08, this.ctx.currentTime);
-          this.musicSource.connect(this.musicGain);
-          this.musicGain.connect(this.ctx.destination);
-          this.musicSource.start(0);
-          console.log(`Successfully playing loaded intro music from: ${url}`);
-          return true;
-        } catch (err) {
-          // Try next url path
-        }
-      }
-      return false;
-    };
-
-    tryLoadRealMp3().then((success) => {
-      if (success) {
-        return;
-      }
-      
-      // Fallback in case loading INTRO.mp3 failed or wasn't found in system directories:
-      if (!this.shouldPlayIntro || this.isMuted || !this.ctx) return;
-      this.stopMusic();
-      
-      console.log("Playing fallback procedurally synthesized intro music...");
-      const tempo = 121; // accurate tempo for Un'estate italiana
-      const secondsPerBeat = 60 / tempo;
-      const measureDuration = secondsPerBeat * 16; // 16 beats loop
-      const bufferSize = this.ctx.sampleRate * measureDuration;
-      const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-      const data = buffer.getChannelData(0);
-
-      // Accurate chorus melody notes for "Un'estate italiana" (To Be Number One / Notti Magiche)
-      const melody = [
-        392.00, 392.00, 440.00, 493.88, 392.00, 329.63, 392.00, 392.00, // G4 G4 A4 B4 G4, E4 G4 G4 (Not-ti ma-gi-che)
-        440.00, 493.88, 523.25, 523.25, 493.88, 440.00, 392.00, 349.23, // A4 B4 C5 C5 B4 A4 G4 F4 (in-se-guen-do un gol)
-        293.66, 349.23, 349.23, 392.00, 440.00, 349.23, 329.63, 293.66, // D4 F4 F4 G4 A4 F4 E4 D4 (sot-to il cie-lo di un')
-        329.63, 392.00, 392.00, 440.00, 493.88, 587.33, 523.25, 493.88  // E4 G4 G4 A4 B4 D5 C5 B4 (es-ta-te i-ta-lia-na)
-      ];
-
-      for (let i = 0; i < bufferSize; i++) {
-        const time = i / this.ctx.sampleRate;
-        
-        // 1. Synth kick drum
-        const beatTime = time % secondsPerBeat;
-        const kick = Math.sin(2 * Math.PI * 110 * Math.exp(-beatTime * 36)) * Math.exp(-beatTime * 6) * 0.16;
-
-        // 2. Synthesizer Lead (80s Analog Sawtooth + Triangle Warm Waveform)
-        const noteIdx = Math.floor((time / (secondsPerBeat * 0.5)) % melody.length);
-        const freq = melody[noteIdx];
-        const noteTime = time % (secondsPerBeat * 0.5);
-        
-        const synthOsc = Math.sin(2 * Math.PI * freq * noteTime + 0.15 * Math.sin(2 * Math.PI * 4 * noteTime)) +
-                         0.3 * Math.sin(2 * Math.PI * freq * 2 * noteTime); 
-        const synthEnv = Math.exp(-noteTime * 4.0) * 0.045;
-        const synth = synthOsc * synthEnv;
-
-        // 3. Stadium Warm Harmony Pad Structure
-        const chordTime = time % measureDuration;
-        let chords = 0;
-        if (chordTime < measureDuration * 0.25) {
-          // G Major: G (196), B (246.94), D (293.66)
-          chords = (Math.sin(2 * Math.PI * 196.00 * time) + Math.sin(2 * Math.PI * 246.94 * time)) * 0.012;
-        } else if (chordTime < measureDuration * 0.5) {
-          // C Major: C (130.81), E (164.81), G (196)
-          chords = (Math.sin(2 * Math.PI * 130.81 * time) + Math.sin(2 * Math.PI * 164.81 * time)) * 0.012;
-        } else if (chordTime < measureDuration * 0.75) {
-          // D Major: D (146.83), F# (185.00), A (220)
-          chords = (Math.sin(2 * Math.PI * 146.83 * time) + Math.sin(2 * Math.PI * 185.00 * time)) * 0.012;
-        } else {
-          // E Minor: E (164.81), G (196), B (246.94)
-          chords = (Math.sin(2 * Math.PI * 164.81 * time) + Math.sin(2 * Math.PI * 196.00 * time)) * 0.012;
-        }
-
-        data[i] = kick + synth + chords;
-        if (data[i] > 1.0) data[i] = 1.0;
-        else if (data[i] < -1.0) data[i] = -1.0;
-      }
-
-      this.musicSource = this.ctx.createBufferSource();
-      this.musicSource.buffer = buffer;
-      this.musicSource.loop = true;
-
-      this.musicGain = this.ctx.createGain();
-      this.musicGain.gain.setValueAtTime(0.08, this.ctx.currentTime); // comfortable atmospheric output volume
-
-      this.musicSource.connect(this.musicGain);
-      this.musicGain.connect(this.ctx.destination);
-      this.musicSource.start(0);
-    });
+    if (this.isMuted) return;
+    // play() may reject until the first user gesture; the persistent unlock retries it.
+    this.introEl.play().catch(() => {});
   }
 
   public stopMusic() {
     this.shouldPlayIntro = false;
+    if (this.introEl) {
+      this.introEl.pause();
+      this.introEl.currentTime = 0;
+    }
     if (this.musicSource) {
       try {
         this.musicSource.stop();
