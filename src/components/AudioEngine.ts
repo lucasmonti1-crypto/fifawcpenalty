@@ -80,7 +80,7 @@ class AudioEngine {
   public startMatchAmbience() {
     this.shouldPlayAmbience = true;
     this.init();
-    this.ambienceEl = this.ensureEl(this.ambienceEl, '/audio/ambiente.mp3', 0.3, true);
+    this.ambienceEl = this.ensureEl(this.ambienceEl, '/audio/ambiente.mp3', 0.62, true);
     if (this.isMuted) return;
     if (this.ambienceEl.paused) this.ambienceEl.play().catch(() => {});
   }
@@ -90,30 +90,40 @@ class AudioEngine {
     if (this.ambienceEl) this.ambienceEl.pause();
   }
 
-  // OUR goal: crowd erupts (bg) + commentator screams (clearer), layered over ambience
+  // OUR goal: crowd erupts (bg) + commentator screams (clearer), layered over ambience.
+  // Both LOOP so the celebration sustains from ball-in until the user continues.
   public playGoalCrowd() {
     this.init();
-    this.golEstadioEl = this.ensureEl(this.golEstadioEl, '/audio/gol-estadio.mp3', 0.5);
-    this.golRelatoEl = this.ensureEl(this.golRelatoEl, '/audio/gol-relato.mp3', 0.85);
+    this.golEstadioEl = this.ensureEl(this.golEstadioEl, '/audio/gol-estadio.mp3', 0.85, true);
+    this.golRelatoEl = this.ensureEl(this.golRelatoEl, '/audio/gol-relato.mp3', 0.95, true);
     // a non-goal sound must never overlap a goal
     if (this.salvadaEl) this.salvadaEl.pause();
     this.fireOneShot(this.golEstadioEl);
     this.fireOneShot(this.golRelatoEl);
   }
 
+  // Cut the goal celebration (called when the user leaves the GOAL screen)
+  public stopGoalCrowd() {
+    for (const el of [this.golEstadioEl, this.golRelatoEl]) {
+      if (el) {
+        el.pause();
+        try { el.currentTime = 0; } catch (e) {}
+      }
+    }
+  }
+
   // Any outcome that is NOT our goal (opponent goal, save, woodwork, off target)
   public playNonGoal() {
     this.init();
-    this.salvadaEl = this.ensureEl(this.salvadaEl, '/audio/salvada.mp3', 0.8);
-    if (this.golEstadioEl) this.golEstadioEl.pause();
-    if (this.golRelatoEl) this.golRelatoEl.pause();
+    this.salvadaEl = this.ensureEl(this.salvadaEl, '/audio/salvada.mp3', 0.85);
+    this.stopGoalCrowd();
     this.fireOneShot(this.salvadaEl);
   }
 
   // Referee whistle the moment the user is allowed to take their penalty
   public playRefWhistle() {
     this.init();
-    this.silbatoEl = this.ensureEl(this.silbatoEl, '/audio/silbato.mp3', 0.65);
+    this.silbatoEl = this.ensureEl(this.silbatoEl, '/audio/silbato.mp3', 0.72);
     this.fireOneShot(this.silbatoEl);
   }
 
@@ -124,6 +134,7 @@ class AudioEngine {
       // Pause WITHOUT clearing the shouldPlay flags so unmute can resume them
       if (this.introEl) this.introEl.pause();
       if (this.ambienceEl) this.ambienceEl.pause();
+      this.stopGoalCrowd();
     } else {
       if (this.ctx) this.gainHum?.gain.setValueAtTime(0.065, this.ctx.currentTime);
       if (this.shouldPlayIntro && this.introEl) this.introEl.play().catch(() => {});

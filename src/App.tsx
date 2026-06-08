@@ -82,6 +82,14 @@ export default function App() {
     }
   }, [gameState, isOpponentTurn]);
 
+  // The goal roar loops through the celebration; cut it as soon as we leave it
+  // (i.e. when the user presses "Continuar tanda de penales").
+  useEffect(() => {
+    if (gameState !== 'CELEBRATION') {
+      audioEngine.stopGoalCrowd();
+    }
+  }, [gameState]);
+
   // On match completion: advance the bracket, crown a champion, or get eliminated
   useEffect(() => {
     if (gameState !== 'MATCH_OVER') return;

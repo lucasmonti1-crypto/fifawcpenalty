@@ -2689,9 +2689,9 @@ export default function StadiumCanvas({
               {aimingStep < 2 && (
                 <div className="grid grid-cols-3 gap-6 w-[300px] md:w-[380px] mb-1 select-none text-center justify-between items-center">
                   {([
-                    { dir: 'right', label: 'COMBA', val: -7 },
+                    { dir: 'side', label: 'COMBA', val: -7 },
                     { dir: 'up', label: 'RECTO', val: 0 },
-                    { dir: 'left', label: 'COMBA', val: 7 },
+                    { dir: 'side', label: 'COMBA', val: 7 },
                   ] as const).map((opt) => {
                     const active = opt.val === 0 ? curve === 0 : (opt.val < 0 ? curve < 0 : curve > 0);
                     return (
@@ -2710,16 +2710,16 @@ export default function StadiumCanvas({
                             </svg>
                           ) : (
                             <svg
-                              width="40"
-                              height="26"
-                              viewBox="0 0 40 26"
+                              width="30"
+                              height="30"
+                              viewBox="0 0 30 34"
                               fill="none"
                               className="mx-auto"
-                              style={{ transform: opt.dir === 'left' ? 'scaleX(-1)' : undefined }}
+                              style={{ transform: opt.val > 0 ? 'scaleX(-1)' : undefined }}
                             >
-                              {/* swoosh: thin tail bottom-left -> sweeps up -> arrowhead right */}
-                              <path d="M4 22 C 8 11, 19 8, 30 9" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
-                              <path d="M24 4 L32 9 L24 14" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+                              {/* matches the ball path: rises from the spot, bows to the LEFT, up into the goal */}
+                              <path d="M20 31 C 8 28, 6 14, 15 7" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
+                              <path d="M10 12 L15 5 L20 12" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
                             </svg>
                           )}
                         </span>
