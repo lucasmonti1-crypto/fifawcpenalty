@@ -9,7 +9,7 @@ export function FlagBadge({ teamId, className = "w-6 h-4" }: FlagBadgeProps) {
   switch (teamId) {
     case 'ARG':
       return (
-        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} viewBox="0 0 3 2">
+        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} preserveAspectRatio="none" viewBox="0 0 3 2">
           <rect width="3" height="2" fill="#74ACDF" />
           <rect y="0.67" width="3" height="0.66" fill="#ffffff" />
           <circle cx="1.5" cy="1" r="0.18" fill="#F4B400" />
@@ -17,7 +17,7 @@ export function FlagBadge({ teamId, className = "w-6 h-4" }: FlagBadgeProps) {
       );
     case 'FRA':
       return (
-        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} viewBox="0 0 3 2">
+        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} preserveAspectRatio="none" viewBox="0 0 3 2">
           <rect width="1" height="2" fill="#0055A5" />
           <rect x="1" width="1" height="2" fill="#ffffff" />
           <rect x="2" width="1" height="2" fill="#EF4135" />
@@ -25,7 +25,7 @@ export function FlagBadge({ teamId, className = "w-6 h-4" }: FlagBadgeProps) {
       );
     case 'BRA':
       return (
-        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} viewBox="0 0 220 154">
+        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} preserveAspectRatio="none" viewBox="0 0 220 154">
           <rect width="220" height="154" fill="#009B3A" />
           <polygon points="110,14 203,77 110,140 17,77" fill="#FFDF00" />
           <circle cx="110" cy="77" r="31" fill="#002776" />
@@ -33,7 +33,7 @@ export function FlagBadge({ teamId, className = "w-6 h-4" }: FlagBadgeProps) {
       );
     case 'POR':
       return (
-        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} viewBox="0 0 3 2">
+        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} preserveAspectRatio="none" viewBox="0 0 3 2">
           <rect width="1.2" height="2" fill="#006600" />
           <rect x="1.2" width="1.8" height="2" fill="#FF0000" />
           <circle cx="1.2" cy="1" r="0.25" fill="#FFD700" />
@@ -41,7 +41,7 @@ export function FlagBadge({ teamId, className = "w-6 h-4" }: FlagBadgeProps) {
       );
     case 'ESP':
       return (
-        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} viewBox="0 0 3 2">
+        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} preserveAspectRatio="none" viewBox="0 0 3 2">
           <rect width="3" height="0.5" fill="#C4151C" />
           <rect y="0.5" width="3" height="1" fill="#F1BF00" />
           <rect y="1.5" width="3" height="0.5" fill="#C4151C" />
@@ -50,7 +50,7 @@ export function FlagBadge({ teamId, className = "w-6 h-4" }: FlagBadgeProps) {
       );
     case 'GER':
       return (
-        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} viewBox="0 0 5 3">
+        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} preserveAspectRatio="none" viewBox="0 0 5 3">
           <rect width="5" height="1" fill="#000000" />
           <rect y="1" width="5" height="1" fill="#FF0000" />
           <rect y="2" width="5" height="1" fill="#FFCC00" />
@@ -58,7 +58,7 @@ export function FlagBadge({ teamId, className = "w-6 h-4" }: FlagBadgeProps) {
       );
     case 'ENG':
       return (
-        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} viewBox="0 0 5 3">
+        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} preserveAspectRatio="none" viewBox="0 0 5 3">
           <rect width="5" height="3" fill="#ffffff" />
           <rect x="2.1" width="0.8" height="3" fill="#CE1126" />
           <rect y="1.1" width="5" height="0.8" fill="#CE1126" />
@@ -66,7 +66,7 @@ export function FlagBadge({ teamId, className = "w-6 h-4" }: FlagBadgeProps) {
       );
     case 'NED':
       return (
-        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} viewBox="0 0 3 2">
+        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} preserveAspectRatio="none" viewBox="0 0 3 2">
           <rect width="3" height="0.67" fill="#AE1C28" />
           <rect y="0.67" width="3" height="0.66" fill="#ffffff" />
           <rect y="1.33" width="3" height="0.67" fill="#21468B" />
@@ -74,7 +74,7 @@ export function FlagBadge({ teamId, className = "w-6 h-4" }: FlagBadgeProps) {
       );
     case 'URU':
       return (
-        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} viewBox="0 0 3 2">
+        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} preserveAspectRatio="none" viewBox="0 0 3 2">
           <rect width="3" height="2" fill="#ffffff" />
           <rect y="0.22" width="3" height="0.22" fill="#4EA9E6" />
           <rect y="0.66" width="3" height="0.22" fill="#4EA9E6" />
@@ -88,7 +88,7 @@ export function FlagBadge({ teamId, className = "w-6 h-4" }: FlagBadgeProps) {
       );
     case 'CRO':
       return (
-        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} viewBox="0 0 3 2">
+        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} preserveAspectRatio="none" viewBox="0 0 3 2">
           <rect width="3" height="0.67" fill="#FF0000" />
           <rect y="0.67" width="3" height="0.66" fill="#ffffff" />
           <rect y="1.33" width="3" height="0.67" fill="#171796" />
@@ -100,7 +100,7 @@ export function FlagBadge({ teamId, className = "w-6 h-4" }: FlagBadgeProps) {
       );
     case 'BEL':
       return (
-        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} viewBox="0 0 3 2">
+        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} preserveAspectRatio="none" viewBox="0 0 3 2">
           <rect width="1" height="2" fill="#000000" />
           <rect x="1" width="1" height="2" fill="#FDDA24" />
           <rect x="2" width="1" height="2" fill="#EF3340" />
@@ -108,7 +108,7 @@ export function FlagBadge({ teamId, className = "w-6 h-4" }: FlagBadgeProps) {
       );
     case 'USA':
       return (
-        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} viewBox="0 0 19 10">
+        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} preserveAspectRatio="none" viewBox="0 0 19 10">
           <rect width="19" height="10" fill="#ffffff" />
           <rect y="0" width="19" height="0.77" fill="#B31942" />
           <rect y="1.54" width="19" height="0.77" fill="#B31942" />
@@ -135,7 +135,7 @@ export function FlagBadge({ teamId, className = "w-6 h-4" }: FlagBadgeProps) {
       );
     case 'MEX':
       return (
-        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} viewBox="0 0 3 2">
+        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} preserveAspectRatio="none" viewBox="0 0 3 2">
           <rect width="1" height="2" fill="#006847" />
           <rect x="1" width="1" height="2" fill="#ffffff" />
           <rect x="2" width="1" height="2" fill="#CE1126" />
@@ -144,7 +144,7 @@ export function FlagBadge({ teamId, className = "w-6 h-4" }: FlagBadgeProps) {
       );
     case 'ITA':
       return (
-        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} viewBox="0 0 3 2">
+        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} preserveAspectRatio="none" viewBox="0 0 3 2">
           <rect width="1" height="2" fill="#008C45" />
           <rect x="1" width="1" height="2" fill="#ffffff" />
           <rect x="2" width="1" height="2" fill="#CD212A" />
@@ -152,7 +152,7 @@ export function FlagBadge({ teamId, className = "w-6 h-4" }: FlagBadgeProps) {
       );
     case 'COL':
       return (
-        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} viewBox="0 0 4 2">
+        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} preserveAspectRatio="none" viewBox="0 0 4 2">
           <rect width="4" height="1" fill="#FCD116" />
           <rect y="1" width="4" height="0.5" fill="#003893" />
           <rect y="1.5" width="4" height="0.5" fill="#CE1126" />
@@ -160,7 +160,7 @@ export function FlagBadge({ teamId, className = "w-6 h-4" }: FlagBadgeProps) {
       );
     case 'MAR':
       return (
-        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} viewBox="0 0 3 2">
+        <svg className={`${className} shadow-sm border border-white/10 rounded-sm`} preserveAspectRatio="none" viewBox="0 0 3 2">
           <rect width="3" height="2" fill="#C1272D" />
           <polygon
             points="1.5,0.66 1.579,0.891 1.823,0.895 1.628,1.042 1.7,1.275 1.5,1.135 1.3,1.275 1.372,1.042 1.177,0.895 1.421,0.891"

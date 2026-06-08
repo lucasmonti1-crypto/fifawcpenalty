@@ -544,6 +544,7 @@ class AudioEngine {
       this.introEl.loop = true;
       this.introEl.volume = 0.6;
       this.introEl.preload = 'auto';
+      this.introEl.autoplay = true; // try to start the moment the page loads
     }
     if (this.isMuted) return;
     // play() may reject until the first user gesture; the persistent unlock retries it.
