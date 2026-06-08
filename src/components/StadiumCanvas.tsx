@@ -46,7 +46,7 @@ interface StadiumCanvasProps {
 const BALL_GRAVITY = -0.0014;
 // Lateral curve acceleration per tick per unit of curve (-10..10). Compensated at
 // launch so the ball still lands on target but banana-bends visibly on the way.
-const CURVE_DRIFT = 0.0011;
+const CURVE_DRIFT = 0.0004;
 
 /**
  * Converts a keeper's GUESS (a sector + a height) into the physical hand-reach
@@ -376,7 +376,7 @@ export default function StadiumCanvas({
     const oppPowerStat = opponentTeam.power;
     const aiSelectedPower = Math.round(oppPowerStat - 8 + Math.random() * 16); // centered around team stat
     const oppCurveStat = opponentTeam.curve;
-    const aiSelectedCurve = Math.round((Math.random() - 0.5) * (oppCurveStat / 5));
+    const aiSelectedCurve = Math.round((Math.random() - 0.5) * (oppCurveStat / 9));
 
     // Save AI variables inside stateRef
     stateRef.current.aiShotDir = aiSelectedDir;
@@ -1147,9 +1147,11 @@ export default function StadiumCanvas({
                // Overpowered shots naturally fly high
                const verticalLift = finalPower > 88 ? (finalPower - 88) * 0.09 : 0;
 
-               // Curve nudges WHERE the ball ends up (right = +, left = -), so the
-               // swerve is a real aiming modifier that the cursor reflects.
-               const curveLandingShift = state.curve * 0.11;
+               // Effective swerve scales with the team's curve rating, so a side with
+               // a 90 curve bends noticeably more than one with 60. Kept subtle/realistic.
+               const effCurve = state.curve * (state.playerTeam.curve / 100);
+               // Curve nudges WHERE the ball ends up (right = +, left = -); the cursor reflects it.
+               const curveLandingShift = effCurve * 0.05;
 
                finalDestX = exactX + deviationX + curveLandingShift;
                finalDestY = exactY + deviationY + verticalLift;
@@ -1163,7 +1165,7 @@ export default function StadiumCanvas({
                finalDestY = state.finalDestY;
 
                const flightTicks = Math.round(5.5 / velocityZ);
-               const horizontalAirDrift = state.curve * CURVE_DRIFT;
+               const horizontalAirDrift = effCurve * CURVE_DRIFT;
                const totalDriftX = (horizontalAirDrift * (flightTicks + 1)) / 2;
 
                const totalDriftY = (BALL_GRAVITY * (flightTicks + 1)) / 2;
@@ -1174,7 +1176,7 @@ export default function StadiumCanvas({
 
                // Spin velocities
                state.ballSpin.x = 0.55;
-               state.ballSpin.y = state.curve * 0.086;
+               state.ballSpin.y = effCurve * 0.086;
 
                // --- EXTREMELY ENHANCED COMPUTER GOALKEEPER AI DECISION ENGINE ---
                const gkStats = GOALKEEPER_REGISTRY[state.opponentTeam.id] || { name: 'Portero', reflejos: 90, alcance: 90 };
@@ -1803,7 +1805,7 @@ export default function StadiumCanvas({
         
         // Curve bending math: Curve applies lateral air displacement over time (only during active flight)
         if (state.gameState === 'BALL_FLIGHT') {
-          const currentCurve = state.isOpponentTurn ? state.aiCurve : state.curve;
+          const currentCurve = state.isOpponentTurn ? state.aiCurve : state.curve * (state.playerTeam.curve / 100);
           b.vx += currentCurve * CURVE_DRIFT;
         }
 
@@ -2459,7 +2461,7 @@ export default function StadiumCanvas({
         const oppPowerStat = opponentTeam.power;
         const aiSelectedPower = Math.round(oppPowerStat - 8 + Math.random() * 16);
         const oppCurveStat = opponentTeam.curve;
-        const aiSelectedCurve = Math.round((Math.random() - 0.5) * (oppCurveStat / 5));
+        const aiSelectedCurve = Math.round((Math.random() - 0.5) * (oppCurveStat / 9));
 
         state.aiShotDir = aiSelectedDir;
         state.aiShotHeight = aiSelectedHeight;
