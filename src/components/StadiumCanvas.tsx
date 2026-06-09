@@ -267,6 +267,46 @@ export default function StadiumCanvas({
     stateRef.current.onShotComplete = onShotComplete;
   }, [gameState, playerTeam, opponentTeam, direction, height, power, curve, shotCount, isOpponentTurn, opponentScore, opponentHistory, onShotComplete]);
 
+  useEffect(() => {
+    if (gameState !== 'PRE_SHOT') return;
+    const state = stateRef.current;
+
+    state.shotLogged = false;
+    state.ball = { x: 0, y: 0.11, z: -5.5, vx: 0, vy: 0, vz: 0, rotX: 0, rotY: 0, scale: 1 };
+    state.ballSpin = { x: 0, y: 0 };
+    state.kicker = { x: -0.9, y: 0, z: -6.7, rightLegAngle: 0, leftLegAngle: 0, frame: 0 };
+    state.keeper = {
+      ...state.keeper,
+      x: 0,
+      y: 0,
+      z: 0,
+      startX: 0,
+      startY: 0,
+      targetX: 0,
+      targetY: 0,
+      angle: 0,
+      scaleY: 1,
+      diveProgress: 0,
+      diveDelay: 0,
+      startDiveZ: -5.5,
+      tookOff: false,
+      landed: false,
+      willMiss: false
+    };
+    state.lockedX = 0;
+    state.lockedY = 1.4;
+    state.sweepX = 0;
+    state.sweepY = 1.4;
+    state.sweepPower = 50;
+    state.hasFinalDest = false;
+    state.finalDestX = 0;
+    state.finalDestY = 0;
+    state.particles = [];
+    state.keeperTrail = [];
+    state.screenShake = 0;
+    state.flashMessage = '';
+  }, [gameState]);
+
   // Synchronize interactiveTarget coordinates back to stateRef
   useEffect(() => {
     stateRef.current.aimTarget = interactiveTarget;
@@ -1112,11 +1152,12 @@ export default function StadiumCanvas({
           }
         } else if (state.gameState === 'KICK') {
           pK.frame++;
-          // strike phase
-          pK.rightLegAngle = 0.95; // Leg swing contact
+          // strike phase: animate the kick faster so the ball launches without a visible pause
+          const kickProgress = Math.min(1, pK.frame / 4);
+          pK.rightLegAngle = -0.8 + kickProgress * 1.75;
           pK.leftLegAngle = -0.2;
 
-          if (pK.frame >= 6) {
+          if (pK.frame >= 4) {
             // Launch Ball! Play thrust kick audio SFX
              audioEngine.playKick(state.isOpponentTurn ? 0.8 : (state.power / 100));
              state.gameState = 'BALL_FLIGHT';
