@@ -3065,7 +3065,7 @@ export default function StadiumCanvas({
 
                     <div className="mt-2 text-center">
                       <span className="text-xs text-white mr-2">Eliminado en</span>
-                      <span className="text-xs text-amber-300 font-bold">{eliminatedStage}</span>
+                      <span className="text-xs text-amber-300 font-bold">{stageName || eliminatedStage}</span>
                     </div>
 
                     <audio ref={bgAudioRef} src="/audio/background.mp3" loop preload="auto" />

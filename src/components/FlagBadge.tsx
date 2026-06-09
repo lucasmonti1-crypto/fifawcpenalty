@@ -5,7 +5,7 @@ interface FlagBadgeProps {
   className?: string;
 }
 
-const FLAG_BASE = 'shadow-sm border border-white/10 rounded-sm aspect-[3/2] object-cover';
+const FLAG_BASE = 'shadow-sm rounded-sm aspect-[3/2] object-cover';
 
 function Flag({ className, children }: { className?: string; children: React.ReactNode }) {
   return (
