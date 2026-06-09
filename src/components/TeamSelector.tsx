@@ -38,7 +38,7 @@ export default function TeamSelector({ onSelected }: TeamSelectorProps) {
 
       {/* Immersive Micro WC 26 Branding */}
       <div className="flex flex-col items-center text-center mb-5 relative select-none">
-        <span className="text-[#ffd700] border border-[#ffd700]/30 bg-slate-950/70 backdrop-blur-md px-3.5 py-1 rounded-full font-mono text-xs uppercase tracking-wider font-bold shadow-md">
+        <span className="text-[#ffd700] font-mono text-xs uppercase tracking-wider font-bold">
           🏆 COPA MUNDIAL {currentYear} 🏆
         </span>
         

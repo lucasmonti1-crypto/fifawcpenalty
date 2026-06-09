@@ -226,7 +226,8 @@ export default function StadiumCanvas({
       startDiveZ: -5.5,
       hairColor: '#331a00',
       tookOff: false,
-      landed: false
+      landed: false,
+      willMiss: false
     },
 
     // Motion-blur trail of the diving keeper (projected screen positions)
@@ -1256,6 +1257,9 @@ export default function StadiumCanvas({
                state.keeper.targetX = gkDive.x;
                state.keeper.targetY = gkDive.y;
 
+               const predictedGloveRadius = 0.80 + ((reach - 85) / 14) * 0.22 + ((reflexes - 85) / 14) * 0.12;
+               state.keeper.willMiss = Math.hypot(finalDestX - gkDive.x, finalDestY - gkDive.y) > predictedGloveRadius + 0.10;
+
                // Dynamic trigger computation for realistic timing coherence with shot duration
                state.keeper.startDiveZ = -5.5 + state.keeper.diveDelay * velocityZ;
                state.keeper.diveProgress = 0;
@@ -1290,6 +1294,10 @@ export default function StadiumCanvas({
                const userDive = computeKeeperDiveTarget(state.direction, userHeightGuess, userGKStat.alcance);
                state.keeper.targetX = userDive.x;
                state.keeper.targetY = userDive.y;
+
+               let predictedGloveRadius = 0.80 + ((userGKStat.alcance - 85) / 14) * 0.22 + ((userGKStat.reflejos - 85) / 14) * 0.12;
+               if (state.aiPower > 88) predictedGloveRadius -= 0.10;
+               state.keeper.willMiss = Math.hypot(finalDestX - userDive.x, finalDestY - userDive.y) > predictedGloveRadius + 0.10;
 
                state.keeper.diveDelay = Math.max(2, Math.min(6, flightTicks - 12));
                state.keeper.startDiveZ = -5.5 + state.keeper.diveDelay * velocityZ;
@@ -1623,17 +1631,18 @@ export default function StadiumCanvas({
           
           const sX = gK.startX !== undefined ? gK.startX : 0;
           const sY = gK.startY !== undefined ? gK.startY : 0;
-          const pathX = sX + (gK.targetX - sX) * easeT;
-          const pathY = sY + (gK.targetY - sY) * easeT;
-
           const dDir = gK.targetX > 0.1 ? 1 : (gK.targetX < -0.1 ? -1 : 0);
           const dHigh = gK.targetY > 1.0;
+          const missReachScale = gK.willMiss ? (dHigh ? 0.86 : 0.90) : 1.0;
+          const pathX = sX + (gK.targetX - sX) * easeT * missReachScale;
+          const pathY = sY + (gK.targetY - sY) * easeT * missReachScale;
 
           // Add a natural arc to the diving line so the keeper doesn't move in a straight rigid line.
           const diveCurve = dDir !== 0 ? Math.sin(Math.PI * easeT) * 0.14 * dDir : 0;
           const riseArc = Math.sin(Math.PI * easeT) * (dHigh ? 0.10 : 0.14);
-          gK.x = pathX + diveCurve;
-          gK.y = pathY + riseArc * 0.5;
+          const liftScale = gK.willMiss ? 0.88 : 1.0;
+          gK.x = pathX + diveCurve * liftScale;
+          gK.y = pathY + riseArc * 0.5 * liftScale;
 
           // Tilt rotation of diving body with more organic posture changes
           if (gK.targetX !== 0) {
@@ -1695,22 +1704,23 @@ export default function StadiumCanvas({
         // Hand target positions (local space — the body rotation handles the lean)
         let lHand: { x: number; y: number };
         let rHand: { x: number; y: number };
+        const handMissScale = gK.willMiss ? 0.84 : 1.0;
         if (dp > 0.02 && dDir !== 0) {
           // Side dive: the lead arm reaches toward the target with a more controlled extension
-          const reach = Math.min(szG * 0.78, szG * (0.42 + dp * 0.34 + Math.sin(Math.PI * Math.min(1, dp)) * 0.08));
-          const lift = dHigh ? -szG * (0.28 + dp * 0.28) : szG * 0.02; // up for high, low dives stay more grounded
+          const reach = Math.min(szG * 0.78, szG * (0.42 + dp * 0.34 + Math.sin(Math.PI * Math.min(1, dp)) * 0.08) * handMissScale);
+          const lift = dHigh ? -szG * (0.28 + dp * 0.28) * handMissScale : szG * 0.02 * handMissScale; // up for high, low dives stay more grounded
           const lead = { x: dDir * reach, y: shoulderY + lift };
-          const trail = { x: -dDir * szG * 0.30, y: shoulderY + szG * 0.14 + Math.sin(state.frameIndex * 0.12) * szG * 0.02 };
+          const trail = { x: -dDir * szG * 0.30 * handMissScale, y: shoulderY + szG * 0.14 + Math.sin(state.frameIndex * 0.12) * szG * 0.02 };
           lHand = dDir < 0 ? lead : trail;
           rHand = dDir < 0 ? trail : lead;
         } else if (dp > 0.02) {
           // Central reaction: high = catch overhead, low = smother down low
           if (dHigh) {
-            lHand = { x: -szG * 0.26, y: shoulderY - szG * (0.28 + dp * 0.36) };
-            rHand = { x: szG * 0.26, y: shoulderY - szG * (0.28 + dp * 0.36) };
+            lHand = { x: -szG * 0.26 * handMissScale, y: shoulderY - szG * (0.28 + dp * 0.36) * handMissScale };
+            rHand = { x: szG * 0.26 * handMissScale, y: shoulderY - szG * (0.28 + dp * 0.36) * handMissScale };
           } else {
-            lHand = { x: -szG * 0.24, y: -szG * 0.08 };
-            rHand = { x: szG * 0.24, y: -szG * 0.08 };
+            lHand = { x: -szG * 0.24 * handMissScale, y: -szG * 0.08 * handMissScale };
+            rHand = { x: szG * 0.24 * handMissScale, y: -szG * 0.08 * handMissScale };
           }
         } else {
           // Idle ready stance: arms out, elbows bent, alert
