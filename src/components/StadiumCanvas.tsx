@@ -748,9 +748,9 @@ export default function StadiumCanvas({
         const targetCamY = Math.max(1.28, state.ball.y * 0.45 + 1.05);
         const targetCamZ = -7.6 + state.ball.z * 0.1;
 
-        camera.x = camera.x * 0.9 + targetCamX * 0.1;
-        camera.y = camera.y * 0.9 + targetCamY * 0.1;
-        camera.z = camera.z * 0.9 + targetCamZ * 0.1;
+        camera.x = camera.x * 0.84 + targetCamX * 0.16;
+        camera.y = camera.y * 0.84 + targetCamY * 0.16;
+        camera.z = camera.z * 0.84 + targetCamZ * 0.16;
       }
 
       // 1. RENDER BACKGROUND STADIUM STANDS & CROWD
@@ -1281,8 +1281,8 @@ export default function StadiumCanvas({
                const finalPower = state.power;
                const perfectMult = isSweetSpot(finalPower) ? 1.0 : 0.82;
                
-               // Faster Z-velocity for more realistic ball flight time
-               velocityZ = 0.065 + (finalPower / 100) * 0.14 * perfectMult;
+               // Z-velocity scaled with power — high power = fast, realistic penalty flight
+               velocityZ = 0.12 + (finalPower / 100) * 0.24 * perfectMult;
 
                // Use exact targeted analog coordinate (the user aimed exactly here!)
                const exactX = state.aimTarget ? state.aimTarget.x : 0;
@@ -1391,12 +1391,12 @@ export default function StadiumCanvas({
                    keeperDiveDir = ballSector === 'left' ? 'right' : (ballSector === 'right' ? 'left' : (Math.random() < 0.5 ? 'left' : 'right'));
                    keeperHeightLoc = Math.random() < 0.5 ? 'low' : 'high';
                  }
-                 state.keeper.diveDelay = Math.max(2, Math.round(12 - (reflexes - 85) * 0.4));
+                 state.keeper.diveDelay = Math.max(1, Math.round(flightTicks * 0.28 - (reflexes - 85) * 0.3));
                } else {
                  // Stays central to smother panenkas / low-centre shots
                  keeperDiveDir = 'center';
                  keeperHeightLoc = finalDestY > 1.6 ? 'high' : 'low';
-                 state.keeper.diveDelay = 5;
+                 state.keeper.diveDelay = Math.max(1, Math.round(flightTicks * 0.15));
                }
 
                // Record starting coordinates
@@ -1419,8 +1419,8 @@ export default function StadiumCanvas({
                // OPPONENT KICKS (User is goalkeeper!)
                finalDestX = state.finalDestX;
                finalDestY = state.finalDestY;
-               // Wide range visual speed calculation for great tactile response and complete balance with user shots
-               velocityZ = 0.065 + (state.aiPower / 100) * 0.14;
+               // Match user velocity formula for balanced feel
+               velocityZ = 0.12 + (state.aiPower / 100) * 0.24;
 
                const flightTicks = Math.round(5.5 / velocityZ);
                const horizontalAirDrift = state.aiCurve * CURVE_DRIFT;
