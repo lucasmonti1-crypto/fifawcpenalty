@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Team, GameState, ShotDirection, ShotHeight, ShotResult, GOALKEEPER_REGISTRY, isSweetSpot, TOURNAMENT_STAGES } from '../types';
+import { Team, GameState, ShotDirection, ShotHeight, ShotResult, GOALKEEPER_REGISTRY, isSweetSpot, TOURNAMENT_STAGES, getTeamAppearance, getGkKit, HairStyle } from '../types';
 import { audioEngine } from './AudioEngine';
 import { Volume2, VolumeX, ArrowLeft, Trophy, RotateCcw, Gamepad2, Info, XCircle } from 'lucide-react';
 import { FlagBadge } from './FlagBadge';
@@ -76,6 +76,104 @@ const computeKeeperDiveTarget = (
     y = height === 'high' ? highReach : 0.38; // lower low dive target to feel more dynamic, not stiff
   }
   return { x, y };
+};
+
+const drawPlayerHair = (
+  ctx: CanvasRenderingContext2D,
+  hairColor: string,
+  hairStyle: HairStyle,
+  sz: number,
+  headY: number
+) => {
+  ctx.fillStyle = hairColor;
+  switch (hairStyle) {
+    case 'mohawk':
+      ctx.beginPath();
+      ctx.moveTo(-sz * 0.035, headY - sz * 0.09);
+      ctx.lineTo(0, headY - sz * 0.19);
+      ctx.lineTo(sz * 0.035, headY - sz * 0.09);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = sz * 0.022;
+      ctx.beginPath();
+      ctx.moveTo(-sz * 0.075, headY - sz * 0.04);
+      ctx.lineTo(sz * 0.075, headY - sz * 0.04);
+      ctx.stroke();
+      break;
+    case 'long':
+      ctx.beginPath();
+      ctx.arc(-sz * 0.07, headY + sz * 0.02, sz * 0.05, 0, Math.PI * 2);
+      ctx.arc(sz * 0.07, headY + sz * 0.02, sz * 0.05, 0, Math.PI * 2);
+      ctx.arc(0, headY - sz * 0.05, sz * 0.105, Math.PI, 0);
+      ctx.fill();
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = sz * 0.01;
+      ctx.beginPath();
+      ctx.moveTo(-sz * 0.08, headY - sz * 0.02);
+      ctx.lineTo(sz * 0.08, headY - sz * 0.02);
+      ctx.stroke();
+      break;
+    case 'afro':
+      ctx.beginPath();
+      ctx.arc(0, headY - sz * 0.05, sz * 0.14, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    case 'curly':
+      for (let i = -2; i <= 2; i++) {
+        ctx.beginPath();
+        ctx.arc(i * sz * 0.04, headY - sz * 0.1, sz * 0.045, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      break;
+    case 'buzz':
+      ctx.beginPath();
+      ctx.arc(0, headY - sz * 0.05, sz * 0.09, Math.PI, 0);
+      ctx.fill();
+      ctx.strokeStyle = hairColor;
+      ctx.globalAlpha = 0.5;
+      ctx.lineWidth = sz * 0.015;
+      for (let i = -1; i <= 1; i++) {
+        ctx.beginPath();
+        ctx.moveTo(i * sz * 0.03, headY - sz * 0.14);
+        ctx.lineTo(i * sz * 0.03, headY - sz * 0.02);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      break;
+    case 'fade':
+      ctx.beginPath();
+      ctx.arc(0, headY - sz * 0.06, sz * 0.1, Math.PI, 0);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(sz * 0.02, headY - sz * 0.11, sz * 0.06, sz * 0.025, Math.PI / 8, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    case 'spiky':
+      for (let i = -2; i <= 2; i++) {
+        ctx.beginPath();
+        ctx.moveTo(i * sz * 0.035, headY - sz * 0.08);
+        ctx.lineTo(i * sz * 0.035 + sz * 0.01, headY - sz * 0.16);
+        ctx.lineTo(i * sz * 0.035 + sz * 0.03, headY - sz * 0.08);
+        ctx.closePath();
+        ctx.fill();
+      }
+      break;
+    case 'beard':
+      ctx.beginPath();
+      ctx.arc(0, headY - sz * 0.05, sz * 0.105, Math.PI, 0);
+      ctx.fill();
+      ctx.strokeStyle = hairColor;
+      ctx.lineWidth = sz * 0.035;
+      ctx.beginPath();
+      ctx.arc(0, headY + sz * 0.01, sz * 0.09, Math.PI * 0.1, Math.PI * 0.9);
+      ctx.stroke();
+      break;
+    default:
+      ctx.beginPath();
+      ctx.arc(0, headY - sz * 0.04, sz * 0.1, Math.PI, 0);
+      ctx.fill();
+  }
 };
 
 
@@ -185,6 +283,7 @@ export default function StadiumCanvas({
     aiPower: 80,
     aiCurve: 0,
     opponentShotSaved: false,
+    ballLaunchPending: false,
 
     // Sweep states
     sweepX: 0,
@@ -208,7 +307,7 @@ export default function StadiumCanvas({
     ballSpin: { x: 0, y: 0 },
     
     // Player physical state (nearer distance: z = -6.7 instead of -12.5)
-    kicker: { x: -0.9, y: 0, z: -6.7, rightLegAngle: 0, leftLegAngle: 0, frame: 0 },
+    kicker: { x: -0.9, y: 0, z: -6.7, rightLegAngle: 0, leftLegAngle: 0, frame: 0, kicked: false, postKickFrame: 0 },
     
     // Goalkeeper physical state
     keeper: {
@@ -252,8 +351,16 @@ export default function StadiumCanvas({
   const [dimensions, setDimensions] = useState({ width: 800, height: 450 });
 
   useEffect(() => {
-    // Synchronize props to ref so animation ticks always use latest user settings
-    stateRef.current.gameState = gameState;
+    // Synchronize props to ref so animation ticks always use latest user settings.
+    // The canvas advances RUN_UP → KICK → BALL_FLIGHT internally while React stays at RUN_UP;
+    // never rewind those phases when unrelated props re-sync.
+    const canvas = stateRef.current;
+    const canvasAhead =
+      gameState === 'RUN_UP' &&
+      (canvas.gameState === 'KICK' || canvas.gameState === 'BALL_FLIGHT');
+    if (!canvasAhead) {
+      canvas.gameState = gameState;
+    }
     stateRef.current.playerTeam = playerTeam;
     stateRef.current.opponentTeam = opponentTeam;
     stateRef.current.direction = direction;
@@ -270,11 +377,14 @@ export default function StadiumCanvas({
   useEffect(() => {
     if (gameState !== 'PRE_SHOT') return;
     const state = stateRef.current;
+    state.ballLaunchPending = false;
 
     state.shotLogged = false;
     state.ball = { x: 0, y: 0.11, z: -5.5, vx: 0, vy: 0, vz: 0, rotX: 0, rotY: 0, scale: 1 };
     state.ballSpin = { x: 0, y: 0 };
-    state.kicker = { x: -0.9, y: 0, z: -6.7, rightLegAngle: 0, leftLegAngle: 0, frame: 0 };
+    state.kicker = { x: -0.9, y: 0, z: -6.7, rightLegAngle: 0, leftLegAngle: 0, frame: 0, kicked: false, postKickFrame: 0 };
+    const defendingTeam = state.isOpponentTurn ? state.playerTeam : state.opponentTeam;
+    const gkAppearance = getTeamAppearance(defendingTeam.id);
     state.keeper = {
       ...state.keeper,
       x: 0,
@@ -289,6 +399,7 @@ export default function StadiumCanvas({
       diveProgress: 0,
       diveDelay: 0,
       startDiveZ: -5.5,
+      hairColor: gkAppearance.hairColor,
       tookOff: false,
       landed: false,
       willMiss: false
@@ -509,7 +620,8 @@ export default function StadiumCanvas({
     if (!ctx) return;
 
     let animFrameId: number;
-    let camera = { x: 0, y: 1.4, z: -8.1, tx: 0, ty: 1.2, tz: -5.5 }; // follow camera state target closer to penalty spot z = -5.5
+    let camera = { x: 0, y: 1.4, z: -8.1, tx: 0, ty: 1.2, tz: -5.5 };
+    let focalLength = 365; // subtle zoom for web viewport readability
 
     // Generate simulated stars / stadium lighting overhead
     const stadiumLights = [
@@ -525,8 +637,6 @@ export default function StadiumCanvas({
 
     // Helper: Projected 3D point to 2D flat coordinates
     const project = (x: number, y: number, z: number, screenShake = 0) => {
-      // Perspective formula with focal distance
-      const focalLength = 320;
       // Relative offset to camera
       const dx = x - camera.x;
       const dy = y - camera.y;
@@ -574,8 +684,13 @@ export default function StadiumCanvas({
       ctx.fillRect(0, 0, dimensions.width, dimensions.height);
 
       // Handle Camera movement logic smoothly
+      if (state.ballLaunchPending && state.gameState === 'KICK') {
+        state.gameState = 'BALL_FLIGHT';
+        state.ballLaunchPending = false;
+      }
+
       if (state.gameState === 'PRE_SHOT') {
-        // Static camera behind kicker closer to penalty spot z = -5.5
+        focalLength = focalLength * 0.94 + 365 * 0.06;
         camera.x = camera.x * 0.95 + 0 * 0.05;
         camera.y = camera.y * 0.95 + 1.2 * 0.05;
         camera.z = camera.z * 0.95 + -8.1 * 0.05;
@@ -621,20 +736,21 @@ export default function StadiumCanvas({
           }
         }
       } else if (state.gameState === 'RUN_UP' || state.gameState === 'KICK') {
-        // Pull back a touch (and rise) into a classic penalty camera so the kicker
-        // never fills the screen — you can see the taker, the goal AND the keeper.
+        // Classic penalty view — kicker, goal and keeper all visible during the run-up
+        focalLength = focalLength * 0.92 + 378 * 0.08;
         camera.x = camera.x * 0.92 + 0 * 0.08;
         camera.y = camera.y * 0.94 + 1.35 * 0.06;
         camera.z = camera.z * 0.94 + -9.1 * 0.06;
       } else if (state.gameState === 'BALL_FLIGHT' || state.gameState === 'CELEBRATION' || state.gameState === 'SAVED' || state.gameState === 'OUT_OF_BOUNDS') {
-        // Broadcast tracking panning of the shot
-        const targetCamX = state.ball.x * 0.45;
-        const targetCamY = Math.max(1.3, state.ball.y * 0.5 + 1.0);
-        const targetCamZ = -11.4 + state.ball.z * 0.25;
+        // Gentle forward nudge — kicker drops behind camera, focus shifts to goal & ball
+        focalLength = focalLength * 0.92 + 385 * 0.08;
+        const targetCamX = state.ball.x * 0.35;
+        const targetCamY = Math.max(1.28, state.ball.y * 0.45 + 1.05);
+        const targetCamZ = -7.6 + state.ball.z * 0.1;
 
-        camera.x = camera.x * 0.88 + targetCamX * 0.12;
-        camera.y = camera.y * 0.88 + targetCamY * 0.12;
-        camera.z = camera.z * 0.88 + targetCamZ * 0.12;
+        camera.x = camera.x * 0.9 + targetCamX * 0.1;
+        camera.y = camera.y * 0.9 + targetCamY * 0.1;
+        camera.z = camera.z * 0.9 + targetCamZ * 0.1;
       }
 
       // 1. RENDER BACKGROUND STADIUM STANDS & CROWD
@@ -1125,46 +1241,40 @@ export default function StadiumCanvas({
         ctx.restore();
       }
 
-      // 4. PLAYER RENDER AND KICKING ANIMATION TRIGGER
-      if (state.gameState === 'RUN_UP' || state.gameState === 'PRE_SHOT' || state.gameState === 'KICK') {
-        const pK = state.kicker;
+      // 4. PLAYER RUN-UP, KICK & SHOT TRIGGER
+      const pK = state.kicker;
 
-        // Physical animate running
-        if (state.gameState === 'RUN_UP') {
-          pK.frame++;
-          // run-up forward motion: ball is at z=-5.5, player runs from z=-6.7 to z=-5.95
-          pK.z += 0.057; 
-          
-          // Smooth diagonal approach from left to clear goalkeeper line of sight
-          const progress = (pK.z - (-6.7)) / (-5.95 - (-6.7));
-          pK.x = -2.3 + Math.min(1.0, Math.max(0, progress)) * (2.3 - 0.15); // approaches ball diagonally from far left
-          
-          pK.rightLegAngle = Math.sin(pK.frame * 0.4) * 0.55;
-          pK.leftLegAngle = -Math.sin(pK.frame * 0.4) * 0.55;
+      if (state.gameState === 'RUN_UP') {
+        pK.frame++;
+        pK.z += 0.057;
+        const progress = (pK.z - (-6.7)) / (-5.95 - (-6.7));
+        pK.x = -2.3 + Math.min(1.0, Math.max(0, progress)) * (2.3 - 0.15);
+        pK.rightLegAngle = Math.sin(pK.frame * 0.4) * 0.55;
+        pK.leftLegAngle = -Math.sin(pK.frame * 0.4) * 0.55;
 
-          // Release shot precisely on final run-up frame
-          if (pK.z >= -5.95) {
-            // Kick trigger! swing right leg back and execute shot calculations
-            state.gameState = 'KICK';
-            pK.frame = 0;
-            pK.rightLegAngle = -0.8; // Cocked back kick
-            pK.leftLegAngle = 0.35;
-          }
-        } else if (state.gameState === 'KICK') {
-          pK.frame++;
-          // strike phase: animate the kick faster so the ball launches without a visible pause
-          const kickProgress = Math.min(1, pK.frame / 4);
-          pK.rightLegAngle = -0.8 + kickProgress * 1.75;
-          pK.leftLegAngle = -0.2;
+        if (pK.z >= -5.95) {
+          state.gameState = 'KICK';
+          pK.frame = 0;
+          pK.rightLegAngle = -0.8;
+          pK.leftLegAngle = 0.35;
+        }
+      } else if (state.gameState === 'KICK') {
+        pK.frame++;
+        // Strike phase — instant contact pose (original timing)
+        pK.rightLegAngle = 0.95;
+        pK.leftLegAngle = -0.2;
 
-          if (pK.frame >= 4) {
-            // Launch Ball! Play thrust kick audio SFX
-             audioEngine.playKick(state.isOpponentTurn ? 0.8 : (state.power / 100));
-             state.gameState = 'BALL_FLIGHT';
+        if (pK.frame >= 5 && !state.ballLaunchPending) {
+          pK.kicked = true;
+            // Mark the ball launch for the next tick after rendering the kicker.
+            state.ballLaunchPending = true;
 
-             let finalDestX = 0;
-             let finalDestY = 0;
-             let velocityZ = 0.22;
+            // Launch ball data will be used when the state flips to BALL_FLIGHT next frame.
+            audioEngine.playKick(state.isOpponentTurn ? 0.8 : (state.power / 100));
+
+            let finalDestX = 0;
+            let finalDestY = 0;
+            let velocityZ = 0.22;
 
              if (!state.isOpponentTurn) {
                // USER KICKS (Normal mode - with highly-coherent shot measurements and pressure factors)
@@ -1360,92 +1470,83 @@ export default function StadiumCanvas({
                  life: 1.0
                });
              }
-          }
         }
+      }
 
-        // Draw Player model in perspective
+      const showKicker =
+        state.gameState === 'PRE_SHOT' ||
+        state.gameState === 'RUN_UP' ||
+        state.gameState === 'KICK';
+
+      if (showKicker) {
         const pKP = project(pK.x, pK.y, pK.z, state.screenShake);
         if (pKP.ok) {
           ctx.save();
-          const sz = pKP.scale * 1.7; // size multiplier
+          const sz = pKP.scale * 1.7;
           const currentKickerTeam = state.isOpponentTurn ? state.opponentTeam : state.playerTeam;
+          const colorSet = currentKickerTeam.colors;
+          const appearance = getTeamAppearance(currentKickerTeam.id);
+          const jerseyNum = String(appearance.number);
+          const numColor =
+            colorSet.shirt === '#ffffff' || colorSet.shirt === '#FFDF00' || colorSet.shirt === '#FCD116' || colorSet.shirt === '#FFD100'
+              ? '#1e293b'
+              : '#ffffff';
 
-          // Player Shadow
           ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
           ctx.beginPath();
           ctx.ellipse(pKP.x, pKP.y, pKP.scale * 0.35, pKP.scale * 0.08, 0, 0, Math.PI * 2);
           ctx.fill();
 
-          const colorSet = currentKickerTeam.colors;
           ctx.lineCap = 'round';
-
-          // Body breath & tilt oscillation animation
           const bodyBreathe = Math.sin(state.frameIndex * 0.1) * sz * 0.015;
-          const runTilt = state.gameState === 'RUN_UP' ? 0.08 : 0;
+          const runTilt = state.gameState === 'RUN_UP' ? 0.08 : state.gameState === 'KICK' ? 0.12 : 0;
           ctx.translate(pKP.x, pKP.y + bodyBreathe);
           ctx.rotate(runTilt);
 
-          // 1. Draw Leg Left (Hip to Foot)
           const leftHipX = -sz * 0.08;
           const leftHipY = -sz * 0.44;
           const leftFootX = leftHipX + Math.sin(pK.leftLegAngle) * sz * 0.22;
           const leftFootY = -sz * 0.15;
-
-          // Shorts part of leg
           ctx.strokeStyle = colorSet.shorts;
           ctx.lineWidth = sz * 0.13;
           ctx.beginPath();
           ctx.moveTo(leftHipX, leftHipY);
           ctx.lineTo(leftHipX + (leftFootX - leftHipX) * 0.4, leftHipY + (leftFootY - leftHipY) * 0.4);
           ctx.stroke();
-
-          // High Socks part of left leg
           ctx.strokeStyle = colorSet.socks || '#ffffff';
           ctx.lineWidth = sz * 0.095;
           ctx.beginPath();
           ctx.moveTo(leftHipX + (leftFootX - leftHipX) * 0.4, leftHipY + (leftFootY - leftHipY) * 0.4);
           ctx.lineTo(leftFootX, leftFootY);
           ctx.stroke();
-
-          // Neon Cleats (Footwear left)
-          ctx.fillStyle = '#ff007f'; // Bright neon hot rose boots!
+          ctx.fillStyle = colorSet.shirt === '#ffffff' ? '#1e293b' : '#ff007f';
           ctx.beginPath();
           ctx.ellipse(leftFootX, leftFootY + sz * 0.02, sz * 0.05, sz * 0.026, Math.PI / 12, 0, Math.PI * 2);
           ctx.fill();
 
-          // 2. Draw Leg Right (Hip to Foot)
           const rightHipX = sz * 0.08;
           const rightHipY = -sz * 0.44;
           const rightFootX = rightHipX + Math.sin(pK.rightLegAngle) * sz * 0.25;
           const rightFootY = -sz * 0.15;
-
-          // Shorts part of leg
           ctx.strokeStyle = colorSet.shorts;
           ctx.lineWidth = sz * 0.13;
           ctx.beginPath();
           ctx.moveTo(rightHipX, rightHipY);
           ctx.lineTo(rightHipX + (rightFootX - rightHipX) * 0.4, rightHipY + (rightFootY - rightHipY) * 0.4);
           ctx.stroke();
-
-          // High Socks part of right leg
           ctx.strokeStyle = colorSet.socks || '#ffffff';
           ctx.lineWidth = sz * 0.095;
           ctx.beginPath();
           ctx.moveTo(rightHipX + (rightFootX - rightHipX) * 0.4, rightHipY + (rightFootY - rightHipY) * 0.4);
           ctx.lineTo(rightFootX, rightFootY);
           ctx.stroke();
-
-          // Neon Cleats (Footwear right)
-          ctx.fillStyle = '#ff007f';
+          ctx.fillStyle = colorSet.shirt === '#ffffff' ? '#1e293b' : '#ff007f';
           ctx.beginPath();
           ctx.ellipse(rightFootX, rightFootY + sz * 0.02, sz * 0.05, sz * 0.026, -Math.PI / 12, 0, Math.PI * 2);
           ctx.fill();
 
-          // 3. Torso / Jersey (with neck trim & tiny squad number!)
           ctx.fillStyle = colorSet.shirt;
           ctx.fillRect(-sz * 0.15, -sz * 0.8, sz * 0.3, sz * 0.38);
-
-          // Jersey patterns (stripes/checkers)
           if (colorSet.pattern === 'stripes' && colorSet.stripes) {
             ctx.fillStyle = colorSet.stripes;
             ctx.fillRect(-sz * 0.1, -sz * 0.8, sz * 0.04, sz * 0.38);
@@ -1457,10 +1558,14 @@ export default function StadiumCanvas({
             ctx.fillRect(-sz * 0.05, -sz * 0.71, sz * 0.09, sz * 0.09);
             ctx.fillRect(-sz * 0.15, -sz * 0.62, sz * 0.09, sz * 0.09);
             ctx.fillRect(sz * 0.05, -sz * 0.62, sz * 0.09, sz * 0.09);
+          } else if (colorSet.pattern === 'hoops' && colorSet.stripes) {
+            ctx.fillStyle = colorSet.stripes;
+            for (let h = 0; h < 5; h++) {
+              ctx.fillRect(-sz * 0.15, -sz * 0.8 + h * sz * 0.076, sz * 0.3, sz * 0.038);
+            }
           }
 
-          // Small neck collar
-          ctx.fillStyle = '#ffedd5'; // Skin tone
+          ctx.fillStyle = appearance.skinTone;
           ctx.beginPath();
           ctx.moveTo(-sz * 0.05, -sz * 0.8);
           ctx.lineTo(sz * 0.05, -sz * 0.8);
@@ -1468,43 +1573,34 @@ export default function StadiumCanvas({
           ctx.closePath();
           ctx.fill();
 
-          // Tiny display number 10 or 7 on chest!
-          ctx.fillStyle = '#ffffff';
+          ctx.fillStyle = numColor;
           ctx.font = `bold ${Math.round(sz * 0.15)}px monospace`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillText(currentKickerTeam.id === 'POR' ? '7' : '10', 0, -sz * 0.61);
+          ctx.fillText(jerseyNum, 0, -sz * 0.61);
 
-          // 4. Arms with dynamic physical swings
-          ctx.strokeStyle = '#ffedd5'; // skin
+          ctx.strokeStyle = appearance.skinTone;
           ctx.lineWidth = sz * 0.07;
-          ctx.lineCap = 'round';
-          
           let lArmX = -sz * 0.3;
           let lArmY = -sz * 0.61;
           let rArmX = sz * 0.3;
           let rArmY = -sz * 0.61;
-
           if (state.gameState === 'RUN_UP') {
             const armSwing = Math.sin(pK.frame * 0.45) * sz * 0.15;
             lArmX += armSwing; lArmY += Math.cos(pK.frame * 0.45) * sz * 0.08;
             rArmX -= armSwing; rArmY -= Math.cos(pK.frame * 0.45) * sz * 0.08;
           } else if (state.gameState === 'KICK') {
-            lArmX = -sz * 0.42; lArmY = -sz * 0.8; // raise arms for kicking balance!
+            lArmX = -sz * 0.42; lArmY = -sz * 0.8;
             rArmX = sz * 0.42; rArmY = -sz * 0.8;
           }
-
           ctx.beginPath();
           ctx.moveTo(-sz * 0.15, -sz * 0.78);
           ctx.lineTo(lArmX, lArmY);
           ctx.stroke();
-
           ctx.beginPath();
           ctx.moveTo(sz * 0.15, -sz * 0.78);
           ctx.lineTo(rArmX, rArmY);
           ctx.stroke();
-
-          // Sleeves
           ctx.strokeStyle = colorSet.shirt;
           ctx.lineWidth = sz * 0.09;
           ctx.beginPath();
@@ -1514,111 +1610,33 @@ export default function StadiumCanvas({
           ctx.lineTo(sz * 0.22, -sz * 0.72);
           ctx.stroke();
 
-          // 5. Head with determined/blinking facial expressions!
-          ctx.fillStyle = '#ffedd5'; // skin
+          const headY = -sz * 0.9;
+          ctx.fillStyle = appearance.skinTone;
           ctx.beginPath();
-          ctx.arc(0, -sz * 0.9, sz * 0.1, 0, Math.PI * 2);
+          ctx.arc(0, headY, sz * 0.1, 0, Math.PI * 2);
           ctx.fill();
-
-          // Blinking determined eyes & intense eyebrows
           const isBlinking = state.frameIndex % 85 < 4;
           ctx.fillStyle = '#0f172a';
           if (!isBlinking) {
             ctx.beginPath();
-            ctx.arc(-sz * 0.032, -sz * 0.90, sz * 0.014, 0, Math.PI * 2);
-            ctx.arc(sz * 0.032, -sz * 0.90, sz * 0.014, 0, Math.PI * 2);
+            ctx.arc(-sz * 0.032, headY, sz * 0.014, 0, Math.PI * 2);
+            ctx.arc(sz * 0.032, headY, sz * 0.014, 0, Math.PI * 2);
             ctx.fill();
           } else {
             ctx.strokeStyle = '#000000';
             ctx.lineWidth = sz * 0.008;
             ctx.beginPath();
-            ctx.moveTo(-sz * 0.05, -sz * 0.90); ctx.lineTo(-sz * 0.015, -sz * 0.90);
-            ctx.moveTo(sz * 0.015, -sz * 0.90); ctx.lineTo(sz * 0.05, -sz * 0.90);
+            ctx.moveTo(-sz * 0.05, headY); ctx.lineTo(-sz * 0.015, headY);
+            ctx.moveTo(sz * 0.015, headY); ctx.lineTo(sz * 0.05, headY);
             ctx.stroke();
           }
-
-          // Determined little eyebrows draw
-          ctx.strokeStyle = '#78350f';
+          ctx.strokeStyle = appearance.hairColor;
           ctx.lineWidth = sz * 0.008;
           ctx.beginPath();
-          ctx.moveTo(-sz * 0.056, -sz * 0.935); ctx.lineTo(-sz * 0.015, -sz * 0.925);
-          ctx.moveTo(sz * 0.015, -sz * 0.925); ctx.lineTo(sz * 0.056, -sz * 0.935);
+          ctx.moveTo(-sz * 0.056, headY - sz * 0.035); ctx.lineTo(-sz * 0.015, headY - sz * 0.025);
+          ctx.moveTo(sz * 0.015, headY - sz * 0.025); ctx.lineTo(sz * 0.056, headY - sz * 0.035);
           ctx.stroke();
-
-          // 6. Hair Styles with volume
-          let hairColor = '#18181b';
-          if (currentKickerTeam.id === 'ARG') {
-            hairColor = '#7c2d12'; // Messi chestnut cooper
-            ctx.fillStyle = hairColor;
-            
-            // Messi cropped volume hair
-            ctx.beginPath();
-            ctx.arc(0, -sz * 0.95, sz * 0.105, Math.PI, 0);
-            ctx.fill();
-            
-            // Messi neat brown beard!
-            ctx.strokeStyle = '#7c2d12';
-            ctx.lineWidth = sz * 0.035;
-            ctx.beginPath();
-            ctx.arc(0, -sz * 0.89, sz * 0.09, Math.PI*0.1, Math.PI*0.9);
-            ctx.stroke();
-          } 
-          else if (currentKickerTeam.id === 'BRA') {
-            hairColor = '#fef08a'; // Neymar platinum mohawk
-            ctx.fillStyle = hairColor;
-            // Spiky mohawk
-            ctx.beginPath();
-            ctx.moveTo(-sz * 0.035, -sz * 0.99);
-            ctx.lineTo(0, -sz * 1.09);
-            ctx.lineTo(sz * 0.035, -sz * 0.99);
-            ctx.closePath();
-            ctx.fill();
-            
-            // white headband
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = sz * 0.022;
-            ctx.beginPath();
-            ctx.moveTo(-sz * 0.075, -sz * 0.94);
-            ctx.lineTo(sz * 0.075, -sz * 0.94);
-            ctx.stroke();
-          } 
-          else if (currentKickerTeam.id === 'POR') {
-            hairColor = '#090503'; // Ronaldo gelled black
-            ctx.fillStyle = hairColor;
-            ctx.beginPath();
-            ctx.arc(0, -sz * 0.96, sz * 0.1, Math.PI, 0);
-            ctx.fill();
-            // gelled high wave crest
-            ctx.beginPath();
-            ctx.ellipse(sz * 0.02, -sz * 1.01, sz * 0.06, sz * 0.025, Math.PI / 8, 0, Math.PI * 2);
-            ctx.fill();
-          } 
-          else if (currentKickerTeam.id === 'CRO') {
-            hairColor = '#eab308'; // Modric long blonde hair + band
-            ctx.fillStyle = hairColor;
-            // side hair locks down to ears
-            ctx.beginPath();
-            ctx.arc(-sz * 0.07, -sz * 0.9, sz * 0.05, 0, Math.PI * 2);
-            ctx.arc(sz * 0.07, -sz * 0.9, sz * 0.05, 0, Math.PI * 2);
-            ctx.arc(0, -sz * 0.95, sz * 0.105, Math.PI, 0);
-            ctx.fill();
-            // thin headband
-            ctx.strokeStyle = '#000000';
-            ctx.lineWidth = sz * 0.01;
-            ctx.beginPath();
-            ctx.moveTo(-sz * 0.08, -sz * 0.92);
-            ctx.lineTo(sz * 0.08, -sz * 0.92);
-            ctx.stroke();
-          } 
-          else {
-            // Standard cropped styled hair
-            hairColor = '#24140b';
-            ctx.fillStyle = hairColor;
-            ctx.beginPath();
-            ctx.arc(0, -sz * 0.94, sz * 0.1, Math.PI, 0);
-            ctx.fill();
-          }
-          
+          drawPlayerHair(ctx, appearance.hairColor, appearance.hairStyle, sz, headY);
           ctx.restore();
         }
       }
@@ -1729,6 +1747,10 @@ export default function StadiumCanvas({
       const gKP = project(gK.x, gK.y + diveLift, gK.z, state.screenShake);
       if (gKP.ok) {
         const szG = gKP.scale * 1.8;
+        const defendingTeam = state.isOpponentTurn ? state.playerTeam : state.opponentTeam;
+        const gkKit = getGkKit(defendingTeam);
+        const gkAppearance = getTeamAppearance(defendingTeam.id);
+        const gkNum = String((gkAppearance.number % 12) + 1);
 
         ctx.save();
         const torsoSkew = gkActive && dDir !== 0 ? dDir * dp * szG * 0.02 : 0;
@@ -1771,7 +1793,7 @@ export default function StadiumCanvas({
         }
 
         // ---- Legs (drive into the dive / bent-knee ready) ----
-        ctx.strokeStyle = '#0f172a';
+        ctx.strokeStyle = gkKit.shorts;
         ctx.lineWidth = szG * 0.12;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
@@ -1800,10 +1822,10 @@ export default function StadiumCanvas({
         }
         ctx.stroke();
 
-        // ---- Torso / keeper jersey ----
+        // ---- Torso / keeper jersey (national GK kit) ----
         const torsoTop = shoulderY;
         const torsoH = (hipY - shoulderY) + szG * 0.07;
-        ctx.fillStyle = '#10b981'; // neon green keeper jersey
+        ctx.fillStyle = gkKit.shirt;
         ctx.beginPath();
         if ((ctx as CanvasRenderingContext2D & { roundRect?: unknown }).roundRect) {
           (ctx as CanvasRenderingContext2D).roundRect(-szG * 0.16, torsoTop, szG * 0.32, torsoH, szG * 0.05);
@@ -1811,14 +1833,17 @@ export default function StadiumCanvas({
           ctx.rect(-szG * 0.16, torsoTop, szG * 0.32, torsoH);
         }
         ctx.fill();
-        ctx.fillStyle = '#065f46'; // darker flank panels
+        ctx.fillStyle = 'rgba(0,0,0,0.18)';
         ctx.fillRect(-szG * 0.16, torsoTop, szG * 0.045, torsoH);
         ctx.fillRect(szG * 0.115, torsoTop, szG * 0.045, torsoH);
-        ctx.fillStyle = '#eab308'; // central accent stripe
-        ctx.fillRect(-szG * 0.022, torsoTop, szG * 0.044, torsoH);
+        ctx.fillStyle = gkKit.shirt === '#ffffff' || gkKit.shirt === '#facc15' ? '#1e293b' : '#ffffff';
+        ctx.font = `bold ${Math.round(szG * 0.13)}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(gkNum, 0, torsoTop + torsoH * 0.42);
 
         // ---- Arms (shoulder -> glove, with an elbow bend) ----
-        ctx.strokeStyle = '#0d9488'; // sleeves
+        ctx.strokeStyle = gkKit.shirt;
         ctx.lineWidth = szG * 0.085;
         const drawArm = (hand: { x: number; y: number }) => {
           const s = hand.x >= 0 ? 1 : -1;
@@ -1856,21 +1881,18 @@ export default function StadiumCanvas({
         ctx.stroke();
 
         // ---- Neck + Head ----
-        ctx.strokeStyle = '#fdba74';
+        ctx.strokeStyle = gkAppearance.skinTone;
         ctx.lineWidth = szG * 0.05;
         ctx.beginPath();
         ctx.moveTo(0, shoulderY);
         ctx.lineTo(0, headY + szG * 0.08);
         ctx.stroke();
 
-        ctx.fillStyle = '#fed7aa'; // head
+        ctx.fillStyle = gkAppearance.skinTone;
         ctx.beginPath();
         ctx.arc(0, headY, szG * 0.1, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = gK.hairColor; // hair
-        ctx.beginPath();
-        ctx.arc(0, headY - szG * 0.02, szG * 0.1, Math.PI * 1.04, Math.PI * 1.96);
-        ctx.fill();
+        drawPlayerHair(ctx, gkAppearance.hairColor, gkAppearance.hairStyle === 'beard' ? 'short' : gkAppearance.hairStyle, szG, headY);
         // Focused eyes tracking the dive direction
         ctx.fillStyle = '#0f172a';
         const eyeDX = dDir * szG * 0.02;
@@ -2341,7 +2363,15 @@ export default function StadiumCanvas({
       // --- TARGET MARKER: shows the ball's real destination on the goal line ---
       // Shown for BOTH the player's shots and the opponent's (once the ball is on its
       // way), and pinned to finalDest so the cursor and the ball always converge.
-      if ((state.gameState === 'RUN_UP' || state.gameState === 'BALL_FLIGHT') && state.hasFinalDest) {
+      const showShotFocus =
+        state.gameState === 'RUN_UP' ||
+        state.gameState === 'KICK' ||
+        state.gameState === 'BALL_FLIGHT' ||
+        state.gameState === 'SAVED' ||
+        state.gameState === 'CELEBRATION' ||
+        state.gameState === 'OUT_OF_BOUNDS';
+
+      if (showShotFocus && state.hasFinalDest) {
         const destP = project(state.finalDestX, state.finalDestY, 0, state.screenShake);
         if (destP.ok) {
           ctx.save();
@@ -2379,6 +2409,31 @@ export default function StadiumCanvas({
 
           ctx.restore();
         }
+      }
+
+      // Ball flight trajectory arc (remaining path to the goal)
+      if (state.gameState === 'BALL_FLIGHT' && state.hasFinalDest) {
+        const b = state.ball;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(0, 229, 255, 0.5)';
+        ctx.lineWidth = 2.2;
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        for (let step = 0; step <= 22; step++) {
+          const t = step / 22;
+          const x = b.x + (state.finalDestX - b.x) * t;
+          const z = b.z + (0 - b.z) * t;
+          const arcHeight = 0.75 * Math.sin(t * Math.PI);
+          const y = b.y + (state.finalDestY - b.y) * t + arcHeight;
+          const p = project(x, y, z, state.screenShake);
+          if (p.ok) {
+            if (step === 0) ctx.moveTo(p.x, p.y);
+            else ctx.lineTo(p.x, p.y);
+          }
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
       }
 
       // Render the Star-panel Football
@@ -2507,7 +2562,7 @@ export default function StadiumCanvas({
       // RESET Player positioning back to original spot (nearer distance)
       state.ball = { x: 0, y: 0.11, z: -5.5, vx: 0, vy: 0, vz: 0, rotX: 0, rotY: 0, scale: 1 };
       state.ballSpin = { x: 0, y: 0 };
-      state.kicker = { x: -2.3, y: 0, z: -6.7, rightLegAngle: 0, leftLegAngle: 0, frame: 0 };
+      state.kicker = { x: -2.3, y: 0, z: -6.7, rightLegAngle: 0, leftLegAngle: 0, frame: 0, kicked: false, postKickFrame: 0 };
       state.keeper.x = 0;
       state.keeper.y = 0;
       state.keeper.z = 0;

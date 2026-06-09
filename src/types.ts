@@ -1,3 +1,12 @@
+export type HairStyle = 'short' | 'curly' | 'mohawk' | 'buzz' | 'long' | 'afro' | 'fade' | 'beard' | 'spiky';
+
+export interface PlayerAppearance {
+  skinTone: string;
+  hairColor: string;
+  hairStyle: HairStyle;
+  number: number;
+}
+
 export interface Team {
   id: string;
   name: string;
@@ -10,7 +19,10 @@ export interface Team {
     shorts: string;
     socks: string;
     stripes?: string; // e.g. for Argentina white/blue
-    pattern?: 'stripes' | 'plain' | 'squares'; // squares for Croatia
+    pattern?: 'stripes' | 'plain' | 'squares' | 'hoops';
+    gkShirt?: string;
+    gkShorts?: string;
+    gkSocks?: string;
   };
 }
 
@@ -224,20 +236,6 @@ export const TEAMS: Team[] = [
       shirt: '#006847',
       shorts: '#ffffff',
       socks: '#CE1126',
-      pattern: 'plain'
-    }
-  },
-  {
-    id: 'ITA',
-    name: 'Italy',
-    player: 'Federico Chiesa',
-    accuracy: 88,
-    power: 83,
-    curve: 84,
-    colors: {
-      shirt: '#0066A6',
-      shorts: '#ffffff',
-      socks: '#0066A6',
       pattern: 'plain'
     }
   },
@@ -753,7 +751,6 @@ export const GOALKEEPER_REGISTRY: Record<string, Goalkeeper> = {
   BEL: { name: 'Thibaut Courtois', reflejos: 92, alcance: 94 },
   USA: { name: 'Matt Turner', reflejos: 86, alcance: 87 },
   MEX: { name: 'Guillermo Ochoa', reflejos: 89, alcance: 86 },
-  ITA: { name: 'Gianluigi Donnarumma', reflejos: 92, alcance: 93 },
   COL: { name: 'David Ospina', reflejos: 87, alcance: 85 },
   MAR: { name: 'Yassine Bounou', reflejos: 90, alcance: 88 },
   JPN: { name: 'Shuichi Gonda', reflejos: 86, alcance: 84 },
@@ -790,3 +787,85 @@ export const GOALKEEPER_REGISTRY: Record<string, Goalkeeper> = {
   GHA: { name: 'Richard Ofori', reflejos: 85, alcance: 84 },
   PAN: { name: 'Jaime Penedo', reflejos: 82, alcance: 80 }
 };
+
+/** Visual identity per nation — skin, hair, jersey number */
+export const PLAYER_APPEARANCES: Record<string, PlayerAppearance> = {
+  ARG: { skinTone: '#e8b88a', hairColor: '#3d2314', hairStyle: 'beard', number: 10 },
+  FRA: { skinTone: '#c68642', hairColor: '#1a1a1a', hairStyle: 'fade', number: 7 },
+  BRA: { skinTone: '#8d5524', hairColor: '#1a1008', hairStyle: 'short', number: 10 },
+  POR: { skinTone: '#fcd9b8', hairColor: '#090503', hairStyle: 'fade', number: 7 },
+  ESP: { skinTone: '#fcd9b8', hairColor: '#2d1810', hairStyle: 'short', number: 8 },
+  GER: { skinTone: '#fcd9b8', hairColor: '#1a1a1a', hairStyle: 'curly', number: 10 },
+  ENG: { skinTone: '#c68642', hairColor: '#1a1008', hairStyle: 'fade', number: 10 },
+  NED: { skinTone: '#fcd9b8', hairColor: '#d4a574', hairStyle: 'short', number: 4 },
+  URU: { skinTone: '#fcd9b8', hairColor: '#2d1810', hairStyle: 'short', number: 15 },
+  CRO: { skinTone: '#fcd9b8', hairColor: '#c9a227', hairStyle: 'long', number: 10 },
+  BEL: { skinTone: '#fcd9b8', hairColor: '#8b6914', hairStyle: 'short', number: 7 },
+  USA: { skinTone: '#fcd9b8', hairColor: '#3d2314', hairStyle: 'short', number: 10 },
+  MEX: { skinTone: '#c68642', hairColor: '#1a1008', hairStyle: 'spiky', number: 11 },
+  COL: { skinTone: '#8d5524', hairColor: '#1a1008', hairStyle: 'afro', number: 7 },
+  MAR: { skinTone: '#c68642', hairColor: '#1a1008', hairStyle: 'short', number: 2 },
+  JPN: { skinTone: '#ffedd5', hairColor: '#1a1008', hairStyle: 'short', number: 10 },
+  KOR: { skinTone: '#ffedd5', hairColor: '#1a1008', hairStyle: 'short', number: 7 },
+  SEN: { skinTone: '#5c3317', hairColor: '#1a1008', hairStyle: 'buzz', number: 10 },
+  AUS: { skinTone: '#fcd9b8', hairColor: '#8b6914', hairStyle: 'short', number: 9 },
+  ZAF: { skinTone: '#5c3317', hairColor: '#1a1008', hairStyle: 'short', number: 11 },
+  CZE: { skinTone: '#fcd9b8', hairColor: '#8b6914', hairStyle: 'short', number: 9 },
+  CAN: { skinTone: '#c68642', hairColor: '#2d1810', hairStyle: 'short', number: 9 },
+  BIH: { skinTone: '#fcd9b8', hairColor: '#3d2314', hairStyle: 'short', number: 11 },
+  QAT: { skinTone: '#c68642', hairColor: '#1a1008', hairStyle: 'short', number: 9 },
+  SUI: { skinTone: '#fcd9b8', hairColor: '#8b6914', hairStyle: 'short', number: 10 },
+  HAI: { skinTone: '#5c3317', hairColor: '#1a1008', hairStyle: 'short', number: 7 },
+  SCO: { skinTone: '#fcd9b8', hairColor: '#8b4513', hairStyle: 'short', number: 9 },
+  PAR: { skinTone: '#c68642', hairColor: '#1a1008', hairStyle: 'short', number: 10 },
+  TUR: { skinTone: '#fcd9b8', hairColor: '#1a1008', hairStyle: 'short', number: 10 },
+  CUW: { skinTone: '#5c3317', hairColor: '#1a1008', hairStyle: 'short', number: 6 },
+  CIV: { skinTone: '#5c3317', hairColor: '#1a1008', hairStyle: 'short', number: 9 },
+  ECU: { skinTone: '#c68642', hairColor: '#1a1008', hairStyle: 'short', number: 13 },
+  SWE: { skinTone: '#fcd9b8', hairColor: '#d4a574', hairStyle: 'short', number: 14 },
+  TUN: { skinTone: '#c68642', hairColor: '#1a1008', hairStyle: 'short', number: 7 },
+  EGY: { skinTone: '#c68642', hairColor: '#1a1008', hairStyle: 'short', number: 10 },
+  IRN: { skinTone: '#fcd9b8', hairColor: '#1a1008', hairStyle: 'short', number: 9 },
+  NZL: { skinTone: '#fcd9b8', hairColor: '#8b6914', hairStyle: 'short', number: 9 },
+  CPV: { skinTone: '#5c3317', hairColor: '#1a1008', hairStyle: 'short', number: 11 },
+  KSA: { skinTone: '#c68642', hairColor: '#1a1008', hairStyle: 'short', number: 10 },
+  IRQ: { skinTone: '#c68642', hairColor: '#1a1008', hairStyle: 'short', number: 7 },
+  NOR: { skinTone: '#fcd9b8', hairColor: '#d4a574', hairStyle: 'short', number: 9 },
+  ALG: { skinTone: '#c68642', hairColor: '#1a1008', hairStyle: 'short', number: 7 },
+  AUT: { skinTone: '#fcd9b8', hairColor: '#2d1810', hairStyle: 'short', number: 9 },
+  JOR: { skinTone: '#c68642', hairColor: '#1a1008', hairStyle: 'short', number: 10 },
+  COD: { skinTone: '#5c3317', hairColor: '#1a1008', hairStyle: 'short', number: 11 },
+  UZB: { skinTone: '#fcd9b8', hairColor: '#1a1008', hairStyle: 'short', number: 9 },
+  GHA: { skinTone: '#5c3317', hairColor: '#1a1008', hairStyle: 'short', number: 10 },
+  PAN: { skinTone: '#c68642', hairColor: '#1a1008', hairStyle: 'short', number: 9 },
+};
+
+const DEFAULT_APPEARANCE: PlayerAppearance = {
+  skinTone: '#ffedd5',
+  hairColor: '#24140b',
+  hairStyle: 'short',
+  number: 9,
+};
+
+export const getTeamAppearance = (teamId: string): PlayerAppearance =>
+  PLAYER_APPEARANCES[teamId] ?? DEFAULT_APPEARANCE;
+
+/** Goalkeeper kit colors — typically contrasting with outfield kit */
+export const GK_SHIRT_COLORS: Record<string, string> = {
+  ARG: '#2d5a27', FRA: '#f5c518', BRA: '#00ff87', POR: '#00e5ff', ESP: '#ff6b35',
+  GER: '#1a1a2e', ENG: '#00ff87', NED: '#ff6b35', URU: '#1a1a2e', CRO: '#ff007f',
+  BEL: '#00e5ff', USA: '#1a1a2e', MEX: '#ff007f', COL: '#ff6b35', MAR: '#f5c518',
+  JPN: '#1a1a2e', KOR: '#00ff87', SEN: '#ff007f', AUS: '#1a1a2e', ZAF: '#ff6b35',
+  CZE: '#00e5ff', CAN: '#1a1a2e', BIH: '#f5c518', QAT: '#ff007f', SUI: '#00ff87',
+  HAI: '#1a1a2e', SCO: '#ff6b35', PAR: '#00e5ff', TUR: '#1a1a2e', CUW: '#f5c518',
+  CIV: '#00ff87', ECU: '#ff007f', SWE: '#1a1a2e', TUN: '#00e5ff', EGY: '#f5c518',
+  IRN: '#1a1a2e', NZL: '#00ff87', CPV: '#ff6b35', KSA: '#00e5ff', IRQ: '#f5c518',
+  NOR: '#1a1a2e', ALG: '#00ff87', AUT: '#ff007f', JOR: '#1a1a2e', COD: '#f5c518',
+  UZB: '#00e5ff', GHA: '#ff6b35', PAN: '#1a1a2e',
+};
+
+export const getGkKit = (team: Team) => ({
+  shirt: team.colors.gkShirt ?? GK_SHIRT_COLORS[team.id] ?? '#facc15',
+  shorts: team.colors.gkShorts ?? team.colors.shorts,
+  socks: team.colors.gkSocks ?? team.colors.socks,
+});
