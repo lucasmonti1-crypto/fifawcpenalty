@@ -43,10 +43,10 @@ interface StadiumCanvasProps {
 // Gravity per tick. Used identically when computing the launch velocity AND when
 // integrating the flight, so the ball always lands exactly on its target while
 // tracing a real parabola (high shots rise and dip in).
-const BALL_GRAVITY = -0.0014;
+const BALL_GRAVITY = -0.0045;
 // Lateral curve acceleration per tick per unit of curve (-10..10). Compensated at
 // launch so the ball still lands on target but banana-bends visibly on the way.
-const CURVE_DRIFT = 0.0004;
+const CURVE_DRIFT = 0.00025;
 
 /**
  * Converts a keeper's GUESS (a sector + a height) into the physical hand-reach
@@ -63,7 +63,7 @@ const computeKeeperDiveTarget = (
 ): { x: number; y: number } => {
   // Horizontal stretch. Posts sit at ±4.5; the keeper's hand only reaches ~2.25..3.2
   // so the very corner stays open — that gap is the striker's reward for accuracy.
-  const sideReach = 2.25 + ((reach - 85) / 14) * 0.95; // ~2.25 (reach 85) .. ~3.2 (reach 99)
+  const sideReach = 2.25 + ((reach - 85) / 14) * 1.08; // slightly more dramatic dives on strong keepers
   let x = 0;
   if (dir === 'left') x = -sideReach;
   else if (dir === 'right') x = sideReach;
@@ -73,10 +73,11 @@ const computeKeeperDiveTarget = (
     y = height === 'high' ? 1.55 : 0.25; // springs up to tip vs stays grounded
   } else {
     const highReach = 1.35 + ((reach - 85) / 14) * 0.40; // ~1.35 .. ~1.75
-    y = height === 'high' ? highReach : 0.55;
+    y = height === 'high' ? highReach : 0.38; // lower low dive target to feel more dynamic, not stiff
   }
   return { x, y };
 };
+
 
 export default function StadiumCanvas({
   playerTeam,
@@ -115,6 +116,12 @@ export default function StadiumCanvas({
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [showRestartConfirm, setShowRestartConfirm] = useState(false);
 
+  const [eliminatedStage, setEliminatedStage] = useState<string>(() => {
+    try { return localStorage.getItem('eliminatedStage') || TOURNAMENT_STAGES[0]; } catch (e) { return TOURNAMENT_STAGES[0]; }
+  });
+  const bgAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [bgPlaying, setBgPlaying] = useState(false);
+
   // Keep a ref of aimingStep to be fully immune to stale closure bugs in fast ticks
   const aimingStepRef = useRef<0 | 1 | 2>(0);
   useEffect(() => {
@@ -130,6 +137,23 @@ export default function StadiumCanvas({
     const nextMute = audioEngine.toggleMute();
     setIsAudioMuted(nextMute);
   };
+
+  // Persist eliminatedStage selection
+  useEffect(() => {
+    try { localStorage.setItem('eliminatedStage', eliminatedStage); } catch (e) {}
+  }, [eliminatedStage]);
+
+  // Attempt to autoplay background music on defeat when possible
+  useEffect(() => {
+    const el = bgAudioRef.current;
+    const isDefeat = gameState === 'MATCH_OVER' && score <= (opponentScore || 0);
+    if (!isDefeat || !el) return;
+    // only try when not muted
+    if (audioEngine.getMuteStatus()) return;
+    el.play().then(() => setBgPlaying(true)).catch(() => setBgPlaying(false));
+  }, [gameState, score, opponentScore]);
+
+  
   
   // Interactive pointer dragging states (Deactivated now in favor of click-lock, but keeping state signatures for background safety)
   const [isDraggingTarget, setIsDraggingTarget] = useState(false);
@@ -1105,8 +1129,8 @@ export default function StadiumCanvas({
                const finalPower = state.power;
                const perfectMult = isSweetSpot(finalPower) ? 1.0 : 0.82;
                
-               // Slower Z-velocity to scale down flight speed, making it highly cinematic and realistic ("que no viaje tan rapido")
-               velocityZ = 0.045 + (finalPower / 100) * 0.11 * perfectMult;
+               // Faster Z-velocity for more realistic ball flight time
+               velocityZ = 0.065 + (finalPower / 100) * 0.14 * perfectMult;
 
                // Use exact targeted analog coordinate (the user aimed exactly here!)
                const exactX = state.aimTarget ? state.aimTarget.x : 0;
@@ -1149,9 +1173,9 @@ export default function StadiumCanvas({
 
                // Effective swerve scales with the team's curve rating, so a side with
                // a 90 curve bends noticeably more than one with 60. Kept subtle/realistic.
-               const effCurve = state.curve * (state.playerTeam.curve / 100);
-               // Curve nudges WHERE the ball ends up (right = +, left = -); the cursor reflects it.
-               const curveLandingShift = effCurve * 0.05;
+               // Invert here so positive curve input bends the shot rightward on screen.
+               const effCurve = -state.curve * (state.playerTeam.curve / 100);
+               const curveLandingShift = effCurve * 0.045;
 
                finalDestX = exactX + deviationX + curveLandingShift;
                finalDestY = exactY + deviationY + verticalLift;
@@ -1241,7 +1265,7 @@ export default function StadiumCanvas({
                finalDestX = state.finalDestX;
                finalDestY = state.finalDestY;
                // Wide range visual speed calculation for great tactile response and complete balance with user shots
-               velocityZ = 0.045 + (state.aiPower / 100) * 0.11;
+               velocityZ = 0.065 + (state.aiPower / 100) * 0.14;
 
                const flightTicks = Math.round(5.5 / velocityZ);
                const horizontalAirDrift = state.aiCurve * CURVE_DRIFT;
@@ -1599,29 +1623,36 @@ export default function StadiumCanvas({
           
           const sX = gK.startX !== undefined ? gK.startX : 0;
           const sY = gK.startY !== undefined ? gK.startY : 0;
-          
-          gK.x = sX + (gK.targetX - sX) * easeT;
-          gK.y = sY + (gK.targetY - sY) * easeT;
-          
-          // Tilt rotation of diving body
+          const pathX = sX + (gK.targetX - sX) * easeT;
+          const pathY = sY + (gK.targetY - sY) * easeT;
+
+          const dDir = gK.targetX > 0.1 ? 1 : (gK.targetX < -0.1 ? -1 : 0);
+          const dHigh = gK.targetY > 1.0;
+
+          // Add a natural arc to the diving line so the keeper doesn't move in a straight rigid line.
+          const diveCurve = dDir !== 0 ? Math.sin(Math.PI * easeT) * 0.14 * dDir : 0;
+          const riseArc = Math.sin(Math.PI * easeT) * (dHigh ? 0.10 : 0.14);
+          gK.x = pathX + diveCurve;
+          gK.y = pathY + riseArc * 0.5;
+
+          // Tilt rotation of diving body with more organic posture changes
           if (gK.targetX !== 0) {
-            // Low dives lean more (toward horizontal); high dives stay upright (a leap)
             const diveHigh = gK.targetY > 1.0;
-            const leanMax = diveHigh ? 0.5 : 0.82;
-            gK.angle = (gK.targetX > 0 ? 1 : -1) * leanMax * easeT;
-            gK.scaleY = 1 - (diveHigh ? 0.12 : 0.26) * easeT;
+            const leanMax = diveHigh ? 0.48 : 0.92;
+            const twist = Math.sin(Math.PI * easeT) * (dHigh ? 0.06 : 0.12);
+            gK.angle = (gK.targetX > 0 ? 1 : -1) * leanMax * easeT + twist * (gK.targetX > 0 ? 1 : -1);
+            gK.scaleY = 1 - (diveHigh ? 0.14 : 0.28) * easeT + Math.sin(easeT * Math.PI) * 0.03;
           } else {
-            // Centered reaction
-            gK.angle = 0;
-            gK.scaleY = gK.targetY > 0.8 ? (1 - 0.1 * easeT) : (1.0 - 0.14 * easeT);
+            gK.angle = Math.sin(easeT * Math.PI) * 0.05;
+            gK.scaleY = gK.targetY > 0.8 ? (1 - 0.12 * easeT + Math.sin(easeT * Math.PI) * 0.02) : (1.0 - 0.16 * easeT + Math.sin(easeT * Math.PI) * 0.02);
           }
         }
       } else {
-        // Gentle breathing bounce / shuffle left-right pre-shot
-        gK.x = Math.sin(state.frameIndex * 0.12) * 0.52;
-        gK.y = 0;
-        gK.angle = Math.sin(state.frameIndex * 0.12) * 0.04;
-        gK.scaleY = 1.0 + Math.sin(state.frameIndex * 0.16) * 0.03;
+        // More dynamic pre-shot readiness: shuffle, breathe and stay ready to spring
+        gK.x = Math.sin(state.frameIndex * 0.14) * 0.72;
+        gK.y = Math.sin(state.frameIndex * 0.22) * 0.08;
+        gK.angle = Math.sin(state.frameIndex * 0.14) * 0.08;
+        gK.scaleY = 1.0 + Math.sin(state.frameIndex * 0.18) * 0.055;
       }
 
       // ---- Pose params (computed before projection so we can add a leap arc) ----
@@ -1630,7 +1661,7 @@ export default function StadiumCanvas({
       const dDir = gK.targetX > 0.1 ? 1 : (gK.targetX < -0.1 ? -1 : 0);
       const dHigh = gK.targetY > 1.0;
       // The keeper LEAPS: an arc that lifts the whole body off the ground mid-dive
-      const diveLift = dp > 0.02 ? Math.sin(Math.PI * dp) * (dDir !== 0 ? 0.5 : (dHigh ? 0.32 : 0.04)) : 0;
+      const diveLift = dp > 0.02 ? Math.sin(Math.PI * dp) * (dDir !== 0 ? 0.32 : (dHigh ? 0.22 : 0.03)) : 0;
 
       // Ground shadow stays on the pitch and shrinks as the keeper rises
       const gkShadow = project(gK.x, 0, gK.z, state.screenShake);
@@ -1650,38 +1681,40 @@ export default function StadiumCanvas({
         const szG = gKP.scale * 1.8;
 
         ctx.save();
-        ctx.translate(gKP.x, gKP.y);
-        ctx.rotate(gK.angle);
+        const torsoSkew = gkActive && dDir !== 0 ? dDir * dp * szG * 0.02 : 0;
+        ctx.translate(gKP.x + torsoSkew, gKP.y);
+        ctx.rotate(gK.angle * 0.72);
         // Gentle readiness bob when idle
-        const bob = gkActive ? 0 : Math.sin(state.frameIndex * 0.16) * szG * 0.015;
+        const bob = gkActive ? 0 : Math.sin(state.frameIndex * 0.16) * szG * 0.012;
+        const diveBend = gkActive ? Math.sin(dp * Math.PI) * szG * 0.06 : 0;
 
-        const hipY = -szG * 0.42 + bob;
-        const shoulderY = -szG * 0.74 + bob;
-        const headY = -szG * 0.92 + bob;
+        const hipY = -szG * 0.42 + bob + diveBend * 0.72;
+        const shoulderY = -szG * 0.74 + bob + diveBend * 0.42;
+        const headY = -szG * 0.92 + bob + diveBend * 0.26;
 
         // Hand target positions (local space — the body rotation handles the lean)
         let lHand: { x: number; y: number };
         let rHand: { x: number; y: number };
         if (dp > 0.02 && dDir !== 0) {
-          // Side dive: the lead arm (dive side) whips out (with a slight overshoot) then settles
-          const reach = szG * (0.5 + dp * 0.42 + Math.sin(Math.PI * Math.min(1, dp)) * 0.10);
-          const lift = dHigh ? -szG * (0.30 + dp * 0.34) : szG * 0.06; // up for high, forward/low for low
+          // Side dive: the lead arm reaches toward the target with a more controlled extension
+          const reach = Math.min(szG * 0.78, szG * (0.42 + dp * 0.34 + Math.sin(Math.PI * Math.min(1, dp)) * 0.08));
+          const lift = dHigh ? -szG * (0.28 + dp * 0.28) : szG * 0.02; // up for high, low dives stay more grounded
           const lead = { x: dDir * reach, y: shoulderY + lift };
-          const trail = { x: -dDir * szG * 0.30, y: shoulderY + szG * 0.12 };
+          const trail = { x: -dDir * szG * 0.30, y: shoulderY + szG * 0.14 + Math.sin(state.frameIndex * 0.12) * szG * 0.02 };
           lHand = dDir < 0 ? lead : trail;
           rHand = dDir < 0 ? trail : lead;
         } else if (dp > 0.02) {
           // Central reaction: high = catch overhead, low = smother down low
           if (dHigh) {
-            lHand = { x: -szG * 0.26, y: shoulderY - szG * (0.30 + dp * 0.40) };
-            rHand = { x: szG * 0.26, y: shoulderY - szG * (0.30 + dp * 0.40) };
+            lHand = { x: -szG * 0.26, y: shoulderY - szG * (0.28 + dp * 0.36) };
+            rHand = { x: szG * 0.26, y: shoulderY - szG * (0.28 + dp * 0.36) };
           } else {
-            lHand = { x: -szG * 0.24, y: -szG * 0.05 };
-            rHand = { x: szG * 0.24, y: -szG * 0.05 };
+            lHand = { x: -szG * 0.24, y: -szG * 0.08 };
+            rHand = { x: szG * 0.24, y: -szG * 0.08 };
           }
         } else {
           // Idle ready stance: arms out, elbows bent, alert
-          const spread = szG * (0.34 + Math.sin(state.frameIndex * 0.16) * 0.02);
+          const spread = szG * (0.34 + Math.sin(state.frameIndex * 0.16) * 0.03);
           lHand = { x: -spread, y: -szG * 0.50 + bob };
           rHand = { x: spread, y: -szG * 0.50 + bob };
         }
@@ -1693,10 +1726,21 @@ export default function StadiumCanvas({
         ctx.lineJoin = 'round';
         ctx.beginPath();
         if (dp > 0.02 && dDir !== 0) {
+          const leadKneeX = dDir * szG * (0.10 + dp * 0.12);
+          const leadKneeY = -szG * 0.20 + dp * 0.08;
+          const leadFootX = dDir * szG * (0.20 + dp * 0.14);
+          const leadFootY = -szG * 0.08 - dp * 0.05;
+          const trailKneeX = -dDir * szG * 0.08;
+          const trailKneeY = -szG * 0.18 + dp * 0.03;
+          const trailFootX = -dDir * szG * 0.16;
+          const trailFootY = -szG * 0.10 + dp * 0.02;
+
           ctx.moveTo(0, hipY);
-          ctx.lineTo(dDir * szG * (0.10 + dp * 0.24), -szG * 0.03); // lead leg drives toward the dive
+          ctx.lineTo(leadKneeX, leadKneeY);
+          ctx.lineTo(leadFootX, leadFootY);
           ctx.moveTo(0, hipY);
-          ctx.lineTo(-dDir * szG * 0.20, -szG * 0.02); // trailing leg
+          ctx.lineTo(trailKneeX, trailKneeY);
+          ctx.lineTo(trailFootX, trailFootY);
         } else {
           ctx.moveTo(-szG * 0.07, hipY);
           ctx.lineTo(-szG * 0.13, -szG * 0.02);
@@ -1728,28 +1772,36 @@ export default function StadiumCanvas({
         const drawArm = (hand: { x: number; y: number }) => {
           const s = hand.x >= 0 ? 1 : -1;
           const sx = s * szG * 0.15;
-          const ex = (sx + hand.x) / 2 + s * szG * 0.03;
-          const ey = (shoulderY + hand.y) / 2 + szG * 0.05;
+          const dx = hand.x - sx;
+          const dy = hand.y - shoulderY;
+          const maxReach = szG * 0.78;
+          const dist = Math.hypot(dx, dy);
+          const reachFactor = dist > maxReach ? maxReach / dist : 1;
+          const endX = sx + dx * reachFactor;
+          const endY = shoulderY + dy * reachFactor;
+          const ex = (sx + endX) / 2 + s * szG * 0.02;
+          const ey = (shoulderY + endY) / 2 + szG * 0.045;
           ctx.beginPath();
           ctx.moveTo(sx, shoulderY);
-          ctx.quadraticCurveTo(ex, ey, hand.x, hand.y);
+          ctx.quadraticCurveTo(ex, ey, endX, endY);
           ctx.stroke();
+          return { x: endX, y: endY };
         };
-        drawArm(lHand);
-        drawArm(rHand);
+        const leftGlovePos = drawArm(lHand);
+        const rightGlovePos = drawArm(rHand);
 
         // ---- Gloves ----
         const gloveR = szG * (dp > 0.02 ? 0.085 : 0.07);
         ctx.fillStyle = '#fb923c'; // bright orange gloves
         ctx.beginPath();
-        ctx.arc(lHand.x, lHand.y, gloveR, 0, Math.PI * 2);
-        ctx.arc(rHand.x, rHand.y, gloveR, 0, Math.PI * 2);
+        ctx.arc(leftGlovePos.x, leftGlovePos.y, gloveR, 0, Math.PI * 2);
+        ctx.arc(rightGlovePos.x, rightGlovePos.y, gloveR, 0, Math.PI * 2);
         ctx.fill();
         ctx.strokeStyle = '#c2410c';
         ctx.lineWidth = szG * 0.012;
         ctx.beginPath();
-        ctx.arc(lHand.x, lHand.y, gloveR, 0, Math.PI * 2);
-        ctx.arc(rHand.x, rHand.y, gloveR, 0, Math.PI * 2);
+        ctx.arc(leftGlovePos.x, leftGlovePos.y, gloveR, 0, Math.PI * 2);
+        ctx.arc(rightGlovePos.x, rightGlovePos.y, gloveR, 0, Math.PI * 2);
         ctx.stroke();
 
         // ---- Neck + Head ----
@@ -1805,7 +1857,7 @@ export default function StadiumCanvas({
         
         // Curve bending math: Curve applies lateral air displacement over time (only during active flight)
         if (state.gameState === 'BALL_FLIGHT') {
-          const currentCurve = state.isOpponentTurn ? state.aiCurve : state.curve * (state.playerTeam.curve / 100);
+          const currentCurve = state.isOpponentTurn ? state.aiCurve : -state.curve * (state.playerTeam.curve / 100);
           b.vx += currentCurve * CURVE_DRIFT;
         }
 
@@ -1906,6 +1958,7 @@ export default function StadiumCanvas({
             state.gameState = 'SAVED';
             if (!state.shotLogged) {
               state.shotLogged = true;
+              audioEngine.playNonGoal();
               state.onShotComplete(result);
             }
           }
@@ -1927,7 +1980,8 @@ export default function StadiumCanvas({
             state.gameState = 'SAVED';
             if (!state.shotLogged) {
               state.shotLogged = true;
-              audioEngine.playGKSave(); // physical glove thud (crowd reaction handled by App)
+              audioEngine.playGKSave();
+              audioEngine.playNonGoal();
               state.onShotComplete(result);
             }
           } 
@@ -1977,7 +2031,8 @@ export default function StadiumCanvas({
               state.gameState = 'SAVED';
               if (!state.shotLogged) {
                 state.shotLogged = true;
-                audioEngine.playGKSave(); // glove thud (crowd reaction handled by App)
+                audioEngine.playGKSave();
+                audioEngine.playNonGoal();
                 state.onShotComplete(result);
               }
             }
@@ -2031,6 +2086,7 @@ export default function StadiumCanvas({
             state.gameState = 'CELEBRATION';
             if (!state.shotLogged) {
               state.shotLogged = true;
+              audioEngine.playGoalCrowd();
               state.onShotComplete(result);
             }
           }
@@ -2043,6 +2099,7 @@ export default function StadiumCanvas({
             state.gameState = 'OUT_OF_BOUNDS';
             if (!state.shotLogged) {
               state.shotLogged = true;
+              audioEngine.playNonGoal();
               state.onShotComplete(result);
             }
           }
@@ -2124,7 +2181,7 @@ export default function StadiumCanvas({
           for (let step = 0; step <= 20; step++) {
             const t = step / 20;
             const z = startZ + (endZ - startZ) * t;
-            const spinOffset = state.curve * 0.12 * Math.pow(t, 2);
+            const spinOffset = -state.curve * 0.12 * Math.pow(t, 2);
             const x = startX + (endX - startX) * t + spinOffset;
             const arcHeight = 0.6 * Math.sin(t * Math.PI); // parabolic arc depth mapped to closer distance
             const y = startY + (endY - startY) * t + arcHeight;
@@ -2689,9 +2746,9 @@ export default function StadiumCanvas({
               {aimingStep < 2 && (
                 <div className="grid grid-cols-3 gap-6 w-[300px] md:w-[380px] mb-1 select-none text-center justify-between items-center">
                   {([
-                    { dir: 'side', label: 'COMBA', val: -7 },
-                    { dir: 'up', label: 'RECTO', val: 0 },
-                    { dir: 'side', label: 'COMBA', val: 7 },
+                    { dir: 'left', label: 'IZQ', val: -7 },
+                    { dir: 'center', label: 'RECTO', val: 0 },
+                    { dir: 'right', label: 'DER', val: 7 },
                   ] as const).map((opt) => {
                     const active = opt.val === 0 ? curve === 0 : (opt.val < 0 ? curve < 0 : curve > 0);
                     return (
@@ -2702,28 +2759,10 @@ export default function StadiumCanvas({
                           active ? 'text-[#00E5FF] scale-110' : 'text-white/70 hover:text-white hover:scale-105'
                         }`}
                       >
-                        <span className={active ? 'text-[#00E5FF]' : 'text-white/60'}>
-                          {opt.dir === 'up' ? (
-                            <svg width="26" height="22" viewBox="0 0 26 22" fill="none" className="mx-auto">
-                              <path d="M13 19 L13 5" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
-                              <path d="M7 10 L13 4 L19 10" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-                          ) : (
-                            <svg
-                              width="30"
-                              height="30"
-                              viewBox="0 0 30 34"
-                              fill="none"
-                              className="mx-auto"
-                              style={{ transform: opt.val > 0 ? 'scaleX(-1)' : undefined }}
-                            >
-                              {/* matches the ball path: rises from the spot, bows to the LEFT, up into the goal */}
-                              <path d="M20 31 C 8 28, 6 14, 15 7" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
-                              <path d="M10 12 L15 5 L20 12" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-                          )}
+                        <span className={`text-2xl md:text-3xl ${active ? 'text-[#00E5FF]' : 'text-white/60'}`}>
+                          {opt.dir === 'center' ? '↑' : opt.val < 0 ? '↖' : '↗'}
                         </span>
-                        {opt.label}
+                        <span className={active ? 'text-[#00E5FF]' : 'text-white/70'}>{opt.label}</span>
                       </button>
                     );
                   })}
@@ -2766,21 +2805,21 @@ export default function StadiumCanvas({
                 onClick={() => handleKeeperDiveChoice('left')}
                 className="bg-transparent border-none text-white hover:text-[#00FF87] font-sans font-black text-sm md:text-base uppercase tracking-widest active:scale-95 transition-all text-center cursor-pointer drop-shadow-[0_4px_8px_rgba(0,0,0,0.95)] hover:scale-110 flex flex-col items-center gap-1"
               >
-                <span className="text-xl md:text-2xl font-black text-[#00FF87] animate-bounce select-none">↖</span>
+                <span className="text-[#00FF87] text-xl md:text-2xl font-black animate-pulse select-none">↖</span>
                 IZQUIERDA
               </button>
               <button
                 onClick={() => handleKeeperDiveChoice('center')}
                 className="bg-transparent border-none text-white hover:text-[#00FF87] font-sans font-black text-sm md:text-base uppercase tracking-widest active:scale-95 transition-all text-center cursor-pointer drop-shadow-[0_4px_8px_rgba(0,0,0,0.95)] hover:scale-110 flex flex-col items-center gap-1"
               >
-                <span className="text-xl md:text-2xl font-black text-[#00FF87] animate-bounce select-none" style={{ animationDelay: '0.15s' }}>↑</span>
+                <span className="text-[#00FF87] text-xl md:text-2xl font-black animate-pulse select-none">↑</span>
                 CENTRO
               </button>
               <button
                 onClick={() => handleKeeperDiveChoice('right')}
                 className="bg-transparent border-none text-white hover:text-[#00FF87] font-sans font-black text-sm md:text-base uppercase tracking-widest active:scale-95 transition-all text-center cursor-pointer drop-shadow-[0_4px_8px_rgba(0,0,0,0.95)] hover:scale-110 flex flex-col items-center gap-1"
               >
-                <span className="text-xl md:text-2xl font-black text-[#00FF87] animate-bounce select-none" style={{ animationDelay: '0.3s' }}>↗</span>
+                <span className="text-[#00FF87] text-xl md:text-2xl font-black animate-pulse select-none">↗</span>
                 DERECHA
               </button>
             </div>
@@ -2903,9 +2942,41 @@ export default function StadiumCanvas({
                   <h1 className="text-4xl md:text-6xl font-display font-black uppercase tracking-wide text-white drop-shadow-[0_4px_16px_rgba(0,0,0,0.85)]">
                     Quedaste eliminado
                   </h1>
-                  <p className="text-sm md:text-base text-white/80 max-w-md drop-shadow-[0_2px_6px_rgba(0,0,0,0.9)]">
-                    <strong className="text-white font-extrabold">{playerTeam.name.toUpperCase()}</strong> cayó ante <strong className="text-white font-extrabold">{opponentTeam.name.toUpperCase()}</strong>.
-                  </p>
+                  <div className="flex flex-col items-center gap-3">
+                    <div className="flex items-center gap-8 justify-center">
+                      <div className="flex items-center gap-3">
+                        <FlagBadge teamId={playerTeam.id} className="w-14 h-14 rounded-full overflow-hidden border-2 border-white/25" />
+                        <strong className="text-white font-extrabold text-2xl">{playerTeam.name.toUpperCase()}</strong>
+                      </div>
+
+                      <span className="text-lg text-white/80">cayó ante</span>
+
+                      <div className="flex items-center gap-3">
+                        <FlagBadge teamId={opponentTeam.id} className="w-14 h-14 rounded-full overflow-hidden border-2 border-white/25" />
+                        <strong className="text-white font-extrabold text-2xl">{opponentTeam.name.toUpperCase()}</strong>
+                      </div>
+                    </div>
+
+                    <div className="mt-2 text-center">
+                      <span className="text-xs text-white mr-2">Eliminado en</span>
+                      <span className="text-xs text-amber-300 font-bold">{eliminatedStage}</span>
+                    </div>
+
+                    <audio ref={bgAudioRef} src="/audio/background.mp3" loop preload="auto" />
+                    {!bgPlaying && (
+                      <button
+                        onClick={() => {
+                          try { audioEngine.setMute(false); } catch (e) {}
+                          const el = bgAudioRef.current;
+                          if (el) {
+                            el.play().then(() => setBgPlaying(true)).catch(() => setBgPlaying(false));
+                          }
+                        }}
+                        className="mt-2 text-xs text-slate-200 bg-slate-800/60 px-3 py-1 rounded-lg"
+                      >Reproducir música</button>
+                    )}
+                  </div>
+
                   <button
                     onClick={onExitSelection}
                     className="mt-3 py-3.5 px-10 bg-gradient-to-r from-[#1e3a8a] to-[#00E5FF] hover:from-[#111827] hover:to-[#00FF87] text-white transition-all duration-300 font-display font-black text-xs uppercase tracking-widest rounded-full shadow-[0_4px_18px_rgba(0,229,255,0.3)] active:scale-95 flex items-center justify-center gap-2 cursor-pointer"

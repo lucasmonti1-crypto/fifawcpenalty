@@ -2,6 +2,23 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Team, ShotDirection, ShotHeight, ShotResult, GameState } from '../types';
 import { audioEngine } from './AudioEngine';
 import { Target, RotateCcw, Volume2, VolumeX, ArrowLeft, Space, Activity, Info } from 'lucide-react';
+import ChampionOverlay from './ChampionOverlay';
+
+const CurveArrowLeft = ({ className }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <path d="M18 6 C14 6 10 10 6 14" />
+    <path d="M6 14 L2 10" />
+    <path d="M6 14 L2 18" />
+  </svg>
+);
+
+const CurveArrowRight = ({ className }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <path d="M6 6 C10 6 14 10 18 14" />
+    <path d="M18 14 L22 10" />
+    <path d="M18 14 L22 18" />
+  </svg>
+);
 
 interface GameUIProps {
   playerTeam: Team;
@@ -132,6 +149,8 @@ export default function GameUI({
     }
   }, [gameState]);
 
+  
+
   // Evaluate perfect shot zones color guides
   const getPowerColor = (p: number) => {
     if (p >= 72 && p <= 88) return 'bg-emerald-500 shadow-[0_0_12px_#10b981]'; // perfect zone
@@ -157,6 +176,10 @@ export default function GameUI({
 
   return (
     <div className="w-full max-w-5xl mx-auto flex flex-col gap-4 px-4 pb-8 select-none">
+          {/* Champion overlay when perfect 5/5 */}
+      {matchOver && goalsCount === 5 && (
+        <ChampionOverlay team={playerTeam} onReplay={onResetMatch} onExit={onExitSelection} />
+      )}
       {/* 1. SCOREBOARD HEADER */}
       <div className="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-4 flex flex-col md:flex-row justify-between items-center gap-4 shadow-xl">
         {/* Left side: Back & Mute controls */}
@@ -357,7 +380,7 @@ export default function GameUI({
                   <Activity className="w-4 h-4 text-cyan-400 animate-pulse" /> Swerve Spin Curve
                 </h3>
                 <span className="text-xs font-mono bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 px-2 py-0.5 rounded">
-                  {curve === 0 ? 'Straight' : (curve > 0 ? `+${curve} Right Hook` : `${curve} Left Hook`)}
+                  {curve === 0 ? 'Recta' : (curve > 0 ? `+${curve} Curva Derecha` : `${Math.abs(curve)} Curva Izquierda`)}
                 </span>
               </div>
               
@@ -373,9 +396,15 @@ export default function GameUI({
                 className="w-full accent-cyan-400 h-2 bg-slate-950 rounded-lg cursor-pointer disabled:opacity-50"
               />
               <div className="flex justify-between text-[10px] font-mono text-slate-500 mt-1">
-                <span>Left Curl</span>
-                <span>Dead Center</span>
-                <span>Right Curl</span>
+                <span className="inline-flex items-center gap-1">
+                  <CurveArrowLeft className="w-4 h-4 text-slate-400" />
+                  Curva Izquierda
+                </span>
+                <span>Centro</span>
+                <span className="inline-flex items-center gap-1">
+                  Curva Derecha
+                  <CurveArrowRight className="w-4 h-4 text-slate-400" />
+                </span>
               </div>
             </div>
 
@@ -451,6 +480,8 @@ export default function GameUI({
                   {goalsCount === 2 && 'KEEP PRACTICING! Spend more time in the Sweet power zone.'}
                   {goalsCount <= 1 && 'BLOCKED OUT! Goalkeeper AI had reading hacks active.'}
                 </p>
+
+                {/* Results summary */}
               </div>
 
               <div className="flex flex-col gap-2">

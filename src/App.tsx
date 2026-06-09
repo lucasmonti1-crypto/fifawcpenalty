@@ -187,13 +187,7 @@ export default function App() {
       isOpponentTurn: isOppTurn
     } = latestStateRef.current;
 
-    // Crowd/commentary layer: OUR goal erupts; anything else gets the "salvada" sting
-    if (result.isGoal && !isOppTurn) {
-      audioEngine.playGoalCrowd();
-    } else {
-      audioEngine.playNonGoal();
-    }
-
+    // The simulation now triggers crowd/commentary immediately in the shot resolution branch.
     if (!isOppTurn) {
       // User just shot
       const nextUserScore = result.isGoal ? currentScore + 1 : currentScore;

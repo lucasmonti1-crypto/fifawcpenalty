@@ -4,9 +4,11 @@ class AudioEngine {
   private humNode: BiquadFilterNode | null = null;
   private humSource: AudioBufferSourceNode | null = null;
   private gainHum: GainNode | null = null;
+  private readonly AMBIENCE_VOLUME = 0.62;
 
   private shouldPlayIntro = false;
   private introEl: HTMLAudioElement | null = null; // the real WC2026 anthem (mp3)
+  private victoryEl: HTMLAudioElement | null = null; // champion victory track
   private unlockAttached = false;
 
   // --- Real recorded match audio (mp3) layered like a broadcast ---
@@ -64,6 +66,11 @@ class AudioEngine {
       el.loop = loop;
       el.volume = volume;
       el.preload = 'auto';
+      try {
+        el.load();
+      } catch (e) {
+        // Some browsers may refuse load before user interaction; it's okay.
+      }
     }
     return el;
   }
@@ -80,7 +87,10 @@ class AudioEngine {
   public startMatchAmbience() {
     this.shouldPlayAmbience = true;
     this.init();
-    this.ambienceEl = this.ensureEl(this.ambienceEl, '/audio/ambiente.mp3', 0.62, true);
+    this.ambienceEl = this.ensureEl(this.ambienceEl, '/audio/ambiente.mp3', this.AMBIENCE_VOLUME, true);
+    this.golEstadioEl = this.ensureEl(this.golEstadioEl, '/audio/gol-estadio.mp3', 0.88, true);
+    this.golRelatoEl = this.ensureEl(this.golRelatoEl, '/audio/gol-relato.mp3', 0.92, true);
+    this.salvadaEl = this.ensureEl(this.salvadaEl, '/audio/salvada.mp3', 0.90);
     if (this.isMuted) return;
     if (this.ambienceEl.paused) this.ambienceEl.play().catch(() => {});
   }
@@ -94,10 +104,15 @@ class AudioEngine {
   // Both LOOP so the celebration sustains from ball-in until the user continues.
   public playGoalCrowd() {
     this.init();
-    this.golEstadioEl = this.ensureEl(this.golEstadioEl, '/audio/gol-estadio.mp3', 0.85, true);
-    this.golRelatoEl = this.ensureEl(this.golRelatoEl, '/audio/gol-relato.mp3', 0.95, true);
+    this.golEstadioEl = this.ensureEl(this.golEstadioEl, '/audio/gol-estadio.mp3', 0.88, true);
+    this.golRelatoEl = this.ensureEl(this.golRelatoEl, '/audio/gol-relato.mp3', 0.92, true);
+    this.golEstadioEl.volume = 0.88;
+    this.golRelatoEl.volume = 0.92;
     // a non-goal sound must never overlap a goal
     if (this.salvadaEl) this.salvadaEl.pause();
+    if (this.shouldPlayAmbience && this.ambienceEl && this.ambienceEl.paused) {
+      this.ambienceEl.play().catch(() => {});
+    }
     this.fireOneShot(this.golEstadioEl);
     this.fireOneShot(this.golRelatoEl);
   }
@@ -115,8 +130,12 @@ class AudioEngine {
   // Any outcome that is NOT our goal (opponent goal, save, woodwork, off target)
   public playNonGoal() {
     this.init();
-    this.salvadaEl = this.ensureEl(this.salvadaEl, '/audio/salvada.mp3', 0.85);
+    this.salvadaEl = this.ensureEl(this.salvadaEl, '/audio/salvada.mp3', 0.90);
+    this.salvadaEl.volume = 0.90;
     this.stopGoalCrowd();
+    if (this.shouldPlayAmbience && this.ambienceEl && this.ambienceEl.paused) {
+      this.ambienceEl.play().catch(() => {});
+    }
     this.fireOneShot(this.salvadaEl);
   }
 
@@ -636,6 +655,10 @@ class AudioEngine {
       this.introEl.pause();
       this.introEl.currentTime = 0;
     }
+    if (this.victoryEl) {
+      this.victoryEl.pause();
+      this.victoryEl.currentTime = 0;
+    }
     if (this.musicSource) {
       try {
         this.musicSource.stop();
@@ -646,55 +669,19 @@ class AudioEngine {
 
   public playVictoryMusic() {
     this.init();
-    if (!this.ctx || this.isMuted) return;
+    if (this.isMuted) return;
     this.stopMusic();
 
-    const now = this.ctx.currentTime;
-    const tempo = 138;
-    const secondsPerBeat = 60 / tempo;
-    const duration = secondsPerBeat * 16; 
-    const bufferSize = this.ctx.sampleRate * duration;
-    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-
-    const fanfare = [
-      523.25, 659.25, 783.99, 1046.50, // C5 E5 G5 C6
-      880.00, 1046.50, 1046.50, 1046.50 // A5 C6 C6 C6
-    ];
-
-    for (let i = 0; i < bufferSize; i++) {
-      const time = i / this.ctx.sampleRate;
-      
-      const snare = (Math.random() * 2 - 1) * Math.exp(-(time % (secondsPerBeat * 0.25)) * 15) * 0.035;
-      
-      const noteIdx = Math.floor((time / (secondsPerBeat * 0.5)) % fanfare.length);
-      const freq = fanfare[noteIdx];
-      const noteTime = time % (secondsPerBeat * 0.5);
-      
-      const osc = Math.sin(2 * Math.PI * freq * noteTime) + 0.4 * Math.sin(2 * Math.PI * freq * 2 * noteTime);
-      const env = Math.exp(-noteTime * 3.8) * 0.09;
-      const melody = osc * env;
-
-      const subBass = Math.sin(2 * Math.PI * 65.40 * time) * 0.04;
-
-      data[i] = snare + melody + subBass;
-      if (data[i] > 1.0) data[i] = 1.0;
-      else if (data[i] < -1.0) data[i] = -1.0;
+    this.victoryEl = this.ensureEl(this.victoryEl, '/audio/campeon.mp3', 0.92, true);
+    if (this.victoryEl.paused) {
+      this.victoryEl.play().catch(() => {});
     }
 
-    this.musicSource = this.ctx.createBufferSource();
-    this.musicSource.buffer = buffer;
-    this.musicSource.loop = false;
-
-    this.musicGain = this.ctx.createGain();
-    this.musicGain.gain.setValueAtTime(0.09, now);
-
-    this.musicSource.connect(this.musicGain);
-    this.musicGain.connect(this.ctx.destination);
-    this.musicSource.start(now);
-
-    // Warm up continuous massive applause
-    this.playCheer();
+    // Keep the celebration layering over the champion song.
+    this.golEstadioEl = this.ensureEl(this.golEstadioEl, '/audio/gol-estadio.mp3', 0.88, true);
+    this.golRelatoEl = this.ensureEl(this.golRelatoEl, '/audio/gol-relato.mp3', 0.92, true);
+    this.fireOneShot(this.golEstadioEl);
+    this.fireOneShot(this.golRelatoEl);
   }
 
   public playDefeatMusic() {

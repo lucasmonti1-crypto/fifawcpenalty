@@ -64,3 +64,29 @@
 .select-scrollbar::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.25);
 }
+
+/* Confetti visuals used on champion overlay */
+.confetti {
+  position: absolute;
+  width: 10px;
+  height: 16px;
+  border-radius: 2px;
+  top: -6%;
+  left: 50%;
+  transform-origin: center;
+  animation: confetti-fall 2200ms linear infinite;
+  opacity: 0.95;
+}
+
+@keyframes confetti-fall {
+  0% { transform: translateY(-8vh) rotate(0deg) translateX(0); opacity: 1; }
+  100% { transform: translateY(110vh) rotate(540deg) translateX(var(--tx, 0px)); opacity: 0.95; }
+}
+
+.confetti-0 { background: #ff4d4f; --tx: -160px; left: 8%; animation-duration: 1900ms; }
+.confetti-1 { background: #ffd700; --tx: 120px; left: 18%; animation-duration: 2100ms; }
+.confetti-2 { background: #00d4ff; --tx: -90px; left: 28%; animation-duration: 2000ms; }
+.confetti-3 { background: #7cfc00; --tx: 80px; left: 38%; animation-duration: 2300ms; }
+.confetti-4 { background: #ff6ec7; --tx: -120px; left: 54%; animation-duration: 2050ms; }
+.confetti-5 { background: #ffa500; --tx: 160px; left: 68%; animation-duration: 2400ms; }
+.confetti-0, .confetti-1, .confetti-2, .confetti-3, .confetti-4, .confetti-5 { mix-blend-mode: screen; }
