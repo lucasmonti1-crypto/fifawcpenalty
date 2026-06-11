@@ -213,8 +213,6 @@ export default function StadiumCanvas({
   const [aimingStep, setAimingStep] = useState<0 | 1 | 2>(0); // 0 = Direction (X), 1 = Height (Y), 2 = Power
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [showRestartConfirm, setShowRestartConfirm] = useState(false);
-  const [overlayVisible, setOverlayVisible] = useState(false);
-  const overlayTimerRef = useRef<number | null>(null);
 
   const [eliminatedStage, setEliminatedStage] = useState<string>(() => {
     try { return localStorage.getItem('eliminatedStage') || TOURNAMENT_STAGES[0]; } catch (e) { return TOURNAMENT_STAGES[0]; }
@@ -420,29 +418,6 @@ export default function StadiumCanvas({
     state.keeperTrail = [];
     state.screenShake = 0;
     state.flashMessage = '';
-  }, [gameState]);
-
-  // Overlay delay: keeps the result/match-over overlay hidden briefly so the animation plays first
-  useEffect(() => {
-    if (overlayTimerRef.current !== null) {
-      clearTimeout(overlayTimerRef.current);
-      overlayTimerRef.current = null;
-    }
-    if (gameState === 'CELEBRATION' || gameState === 'SAVED' || gameState === 'OUT_OF_BOUNDS') {
-      setOverlayVisible(false);
-      overlayTimerRef.current = window.setTimeout(() => setOverlayVisible(true), 1400);
-    } else if (gameState === 'MATCH_OVER') {
-      setOverlayVisible(false);
-      overlayTimerRef.current = window.setTimeout(() => setOverlayVisible(true), 2200);
-    } else {
-      setOverlayVisible(false);
-    }
-    return () => {
-      if (overlayTimerRef.current !== null) {
-        clearTimeout(overlayTimerRef.current);
-        overlayTimerRef.current = null;
-      }
-    };
   }, [gameState]);
 
   // Synchronize interactiveTarget coordinates back to stateRef
@@ -2967,8 +2942,8 @@ export default function StadiumCanvas({
         </div>
       )}
 
-      {/* 5. MATCH ROUND REVISION / SUMMARY OVERLAYS CARD (delayed to let the animation play first) */}
-      {overlayVisible && (
+      {/* 5. MATCH ROUND REVISION / SUMMARY OVERLAYS CARD (only after the ball is resolved) */}
+      {gameState !== 'PRE_SHOT' && gameState !== 'RUN_UP' && gameState !== 'KICK' && gameState !== 'BALL_FLIGHT' && (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-transparent pointer-events-auto p-6 select-none animate-fade-in">
           {gameState === 'MATCH_OVER' ? (
             <div className="flex flex-col items-center justify-center gap-6 select-none animate-scale-up max-w-sm w-full filter drop-shadow-[0_4px_16px_rgba(0,0,0,0.95)]">
