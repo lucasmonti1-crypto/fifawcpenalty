@@ -213,6 +213,8 @@ export default function StadiumCanvas({
   const [aimingStep, setAimingStep] = useState<0 | 1 | 2>(0); // 0 = Direction (X), 1 = Height (Y), 2 = Power
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [showRestartConfirm, setShowRestartConfirm] = useState(false);
+  const [overlayVisible, setOverlayVisible] = useState(false);
+  const overlayTimerRef = useRef<number | null>(null);
 
   const [eliminatedStage, setEliminatedStage] = useState<string>(() => {
     try { return localStorage.getItem('eliminatedStage') || TOURNAMENT_STAGES[0]; } catch (e) { return TOURNAMENT_STAGES[0]; }
@@ -300,7 +302,9 @@ export default function StadiumCanvas({
     
     // Exact analog trajectory target
     aimTarget: { x: 0, y: 1.4 },
-    
+    firedAimX: 0,
+    firedAimY: 0.5,
+
     // Ball physical state (nearer distance: z = -5.5 instead of -11)
     ball: { x: 0, y: 0.11, z: -5.5, vx: 0, vy: 0, vz: 0, rotX: 0, rotY: 0, scale: 1 },
     // Ball spin rotation speeds
@@ -418,6 +422,29 @@ export default function StadiumCanvas({
     state.flashMessage = '';
   }, [gameState]);
 
+  // Overlay delay: keeps the result/match-over overlay hidden briefly so the animation plays first
+  useEffect(() => {
+    if (overlayTimerRef.current !== null) {
+      clearTimeout(overlayTimerRef.current);
+      overlayTimerRef.current = null;
+    }
+    if (gameState === 'CELEBRATION' || gameState === 'SAVED' || gameState === 'OUT_OF_BOUNDS') {
+      setOverlayVisible(false);
+      overlayTimerRef.current = window.setTimeout(() => setOverlayVisible(true), 1400);
+    } else if (gameState === 'MATCH_OVER') {
+      setOverlayVisible(false);
+      overlayTimerRef.current = window.setTimeout(() => setOverlayVisible(true), 2200);
+    } else {
+      setOverlayVisible(false);
+    }
+    return () => {
+      if (overlayTimerRef.current !== null) {
+        clearTimeout(overlayTimerRef.current);
+        overlayTimerRef.current = null;
+      }
+    };
+  }, [gameState]);
+
   // Synchronize interactiveTarget coordinates back to stateRef
   useEffect(() => {
     stateRef.current.aimTarget = interactiveTarget;
@@ -499,8 +526,12 @@ export default function StadiumCanvas({
     } else if (aimingStepRef.current === 2) {
       // Lock Power and Fire!
       const finalPower = stateRef.current.sweepPower;
-      
-      // Map exact analog target X and Y to direction/height sectors for visual/score consistency 
+
+      // Freeze the exact aimed coordinates now, before React re-renders change direction/height props
+      stateRef.current.firedAimX = stateRef.current.lockedX;
+      stateRef.current.firedAimY = stateRef.current.lockedY;
+
+      // Map exact analog target X and Y to direction/height sectors for visual/score consistency
       let dir: ShotDirection = 'center';
       if (stateRef.current.lockedX < -1.5) dir = 'left';
       else if (stateRef.current.lockedX > 1.5) dir = 'right';
@@ -710,7 +741,8 @@ export default function StadiumCanvas({
           state.sweepY = 1.4 + Math.sin(state.frameIndex * sweepSpeed) * 1.35;
           state.aimTarget = { x: state.lockedX, y: state.sweepY };
         } else if (aimingStepRef.current === 2) {
-          // Phase 2: Sweep Power (10 to 100)
+          // Phase 2: Sweep Power — pin the cursor to the locked target so it doesn't move
+          state.aimTarget = { x: state.lockedX, y: state.lockedY };
           const sweepSpeed = 0.16 * pressureMultiplier;
           state.sweepPower = Math.round(50 + Math.sin(state.frameIndex * sweepSpeed) * 48);
 
@@ -1284,9 +1316,9 @@ export default function StadiumCanvas({
                // Z-velocity scaled with power — high power = fast, realistic penalty flight
                velocityZ = 0.12 + (finalPower / 100) * 0.24 * perfectMult;
 
-               // Use exact targeted analog coordinate (the user aimed exactly here!)
-               const exactX = state.aimTarget ? state.aimTarget.x : 0;
-               const exactY = state.aimTarget ? state.aimTarget.y : 0.5;
+               // Use coordinates frozen at fire time — immune to React prop updates during run-up
+               const exactX = state.firedAimX;
+               const exactY = state.firedAimY;
 
                // User Accuracy Base
                const playerAccuracy = state.playerTeam.accuracy; // typically 75-95
@@ -2563,6 +2595,8 @@ export default function StadiumCanvas({
       state.ball = { x: 0, y: 0.11, z: -5.5, vx: 0, vy: 0, vz: 0, rotX: 0, rotY: 0, scale: 1 };
       state.ballSpin = { x: 0, y: 0 };
       state.kicker = { x: -2.3, y: 0, z: -6.7, rightLegAngle: 0, leftLegAngle: 0, frame: 0, kicked: false, postKickFrame: 0 };
+      state.firedAimX = 0;
+      state.firedAimY = 0.5;
       state.keeper.x = 0;
       state.keeper.y = 0;
       state.keeper.z = 0;
@@ -2708,7 +2742,7 @@ export default function StadiumCanvas({
               <span className="text-base md:text-lg lg:text-xl font-black text-white uppercase tracking-widest block drop-shadow-[0_1.5px_2px_rgba(0,0,0,0.65)]">
                 {playerTeam.id}
               </span>
-              <FlagBadge teamId={playerTeam.id} className="w-9 h-6 md:w-11 md:h-7 rounded-sm shadow-md border border-white/20" />
+              <FlagBadge teamId={playerTeam.id} className="w-9 h-6 md:w-11 md:h-7 rounded-sm shadow-md" />
             </div>
             
             {/* Round Indicators for Player under flag */}
@@ -2769,7 +2803,7 @@ export default function StadiumCanvas({
           {/* Right Opponent selection details & history */}
           <div className="flex flex-col items-start justify-start w-2/5 gap-2 pt-0.5">
             <div className="flex items-center gap-2.5 justify-start">
-              <FlagBadge teamId={opponentTeam.id} className="w-9 h-6 md:w-11 md:h-7 rounded-sm shadow-md border border-white/20" />
+              <FlagBadge teamId={opponentTeam.id} className="w-9 h-6 md:w-11 md:h-7 rounded-sm shadow-md" />
               <span className="text-base md:text-lg lg:text-xl font-black text-white uppercase tracking-widest block drop-shadow-[0_1.5px_2px_rgba(0,0,0,0.65)]">
                 {opponentTeam.id}
               </span>
@@ -2933,8 +2967,8 @@ export default function StadiumCanvas({
         </div>
       )}
 
-      {/* 5. MATCH ROUND REVISION / SUMMARY OVERLAYS CARD (only after the ball is resolved) */}
-      {gameState !== 'PRE_SHOT' && gameState !== 'RUN_UP' && gameState !== 'KICK' && gameState !== 'BALL_FLIGHT' && (
+      {/* 5. MATCH ROUND REVISION / SUMMARY OVERLAYS CARD (delayed to let the animation play first) */}
+      {overlayVisible && (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-transparent pointer-events-auto p-6 select-none animate-fade-in">
           {gameState === 'MATCH_OVER' ? (
             <div className="flex flex-col items-center justify-center gap-6 select-none animate-scale-up max-w-sm w-full filter drop-shadow-[0_4px_16px_rgba(0,0,0,0.95)]">
@@ -2976,7 +3010,7 @@ export default function StadiumCanvas({
                   </h1>
 
                   <div className="mt-4 flex items-center gap-3 wc-rise">
-                    <FlagBadge teamId={playerTeam.id} className="w-11 h-7 rounded shadow-lg border border-white/25" />
+                    <FlagBadge teamId={playerTeam.id} className="w-11 h-7 rounded shadow-lg" />
                     <span className="text-xl md:text-3xl font-display font-black text-white tracking-wide">
                       {playerTeam.name.toUpperCase()}
                     </span>
@@ -3026,7 +3060,7 @@ export default function StadiumCanvas({
                     <div className="mt-6 flex flex-col items-center gap-1.5 wc-rise">
                       <span className="text-[10px] font-mono uppercase tracking-widest text-slate-400">Próximo rival</span>
                       <div className="flex items-center gap-3">
-                        <FlagBadge teamId={nextOpponent.id} className="w-10 h-7 rounded shadow-lg border border-white/20" />
+                        <FlagBadge teamId={nextOpponent.id} className="w-10 h-7 rounded shadow-lg" />
                         <span className="text-lg md:text-2xl font-display font-black text-white tracking-wide">{nextOpponent.name.toUpperCase()}</span>
                       </div>
                       <span className="text-[11px] font-mono text-[#00E5FF]">Arquero: {GOALKEEPER_REGISTRY[nextOpponent.id]?.name || 'Portero'}</span>
@@ -3051,14 +3085,14 @@ export default function StadiumCanvas({
                   <div className="flex flex-col items-center gap-3">
                     <div className="flex items-center gap-8 justify-center">
                       <div className="flex items-center gap-3">
-                        <FlagBadge teamId={playerTeam.id} className="w-14 h-14 rounded-full overflow-hidden border-2 border-white/25" />
+                        <FlagBadge teamId={playerTeam.id} className="w-14 h-14 rounded-full overflow-hidden" />
                         <strong className="text-white font-extrabold text-2xl">{playerTeam.name.toUpperCase()}</strong>
                       </div>
 
                       <span className="text-lg text-white/80">cayó ante</span>
 
                       <div className="flex items-center gap-3">
-                        <FlagBadge teamId={opponentTeam.id} className="w-14 h-14 rounded-full overflow-hidden border-2 border-white/25" />
+                        <FlagBadge teamId={opponentTeam.id} className="w-14 h-14 rounded-full overflow-hidden" />
                         <strong className="text-white font-extrabold text-2xl">{opponentTeam.name.toUpperCase()}</strong>
                       </div>
                     </div>
