@@ -65,6 +65,8 @@ export default function App() {
     if (gameState === 'TEAM_SELECT') {
       audioEngine.init();
       audioEngine.stopMatchAmbience();
+      audioEngine.stopMusic(); // cut champion/defeat tracks left over from a finished run
+      audioEngine.stopGoalCrowd();
       audioEngine.playIntroMusic();
     } else if (gameState === 'MATCH_OVER') {
       audioEngine.stopMusic();

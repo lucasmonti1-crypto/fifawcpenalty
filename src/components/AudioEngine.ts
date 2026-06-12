@@ -671,17 +671,14 @@ class AudioEngine {
     this.init();
     if (this.isMuted) return;
     this.stopMusic();
+    // The champion anthem plays ALONE — the goal commentary/crowd loops from the
+    // winning kick must not keep blaring over it.
+    this.stopGoalCrowd();
 
     this.victoryEl = this.ensureEl(this.victoryEl, '/audio/campeon.mp3', 0.92, true);
     if (this.victoryEl.paused) {
       this.victoryEl.play().catch(() => {});
     }
-
-    // Keep the celebration layering over the champion song.
-    this.golEstadioEl = this.ensureEl(this.golEstadioEl, '/audio/gol-estadio.mp3', 0.88, true);
-    this.golRelatoEl = this.ensureEl(this.golRelatoEl, '/audio/gol-relato.mp3', 0.92, true);
-    this.fireOneShot(this.golEstadioEl);
-    this.fireOneShot(this.golRelatoEl);
   }
 
   public playDefeatMusic() {

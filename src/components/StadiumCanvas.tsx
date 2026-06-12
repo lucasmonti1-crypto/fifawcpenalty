@@ -328,7 +328,9 @@ export default function StadiumCanvas({
       hairColor: '#331a00',
       tookOff: false,
       landed: false,
-      willMiss: false
+      willMiss: false,
+      // Effective glove radius committed at launch (stats + power + stage difficulty)
+      gloveRadius: 0.8
     },
 
     // Motion-blur trail of the diving keeper (projected screen positions)
@@ -337,6 +339,9 @@ export default function StadiumCanvas({
     // Net physical simulation (grid of points at z=0 to z=0.8)
     netPoints: [] as { x: number; y: number; z: number; ox: number; oy: number; oz: number; vx: number; vy: number; vz: number }[],
     
+    // Knockout stage (0 = Octavos ... 3 = Final) — later rounds play harder
+    stageIndex: 0,
+
     // Game variables
     frameIndex: 0,
     crowdTimer: 0,
@@ -374,7 +379,8 @@ export default function StadiumCanvas({
     stateRef.current.opponentScore = opponentScore;
     stateRef.current.opponentHistory = opponentHistory;
     stateRef.current.onShotComplete = onShotComplete;
-  }, [gameState, playerTeam, opponentTeam, direction, height, power, curve, shotCount, isOpponentTurn, opponentScore, opponentHistory, onShotComplete]);
+    stateRef.current.stageIndex = stageIndex;
+  }, [gameState, playerTeam, opponentTeam, direction, height, power, curve, shotCount, isOpponentTurn, opponentScore, opponentHistory, onShotComplete, stageIndex]);
 
   useEffect(() => {
     if (gameState !== 'PRE_SHOT') return;
@@ -547,28 +553,13 @@ export default function StadiumCanvas({
 
     audioEngine.playKick(0.3); // select sound SFX feedback
 
-    // Generate opponent's AI shot direction and height
-    const directions: ShotDirection[] = ['left', 'center', 'right'];
-    const heights: ShotHeight[] = ['low', 'high'];
-
-    const aiSelectedDir = directions[Math.floor(Math.random() * 3)];
-    const aiSelectedHeight = heights[Math.random() < 0.65 ? 0 : 1];
-    
-    // Opponent player stats-based power & curve
-    const oppPowerStat = opponentTeam.power;
-    const aiSelectedPower = Math.round(oppPowerStat - 8 + Math.random() * 16); // centered around team stat
-    const oppCurveStat = opponentTeam.curve;
-    const aiSelectedCurve = Math.round((Math.random() - 0.5) * (oppCurveStat / 9));
-
-    // Save AI variables inside stateRef
-    stateRef.current.aiShotDir = aiSelectedDir;
-    stateRef.current.aiShotHeight = aiSelectedHeight;
-    stateRef.current.aiPower = aiSelectedPower;
-    stateRef.current.aiCurve = aiSelectedCurve;
-
-    // Trigger onShoot so App.tsx transitions to RUN_UP state
+    // The AI shot (direction, height, power, curve AND its exact landing point) was
+    // already rolled when this turn began (PRE_SHOT effect). Reuse it so the flight
+    // parameters always agree with the precomputed destination — re-rolling here made
+    // the ball fly to one spot with the spin/speed of a different shot.
+    const s = stateRef.current;
     if (onShoot) {
-      onShoot(dir, aiSelectedHeight, aiSelectedPower, aiSelectedCurve);
+      onShoot(dir, s.aiShotHeight, s.aiPower, s.aiCurve);
     }
   };
 
@@ -701,8 +692,8 @@ export default function StadiumCanvas({
         camera.y = camera.y * 0.95 + 1.2 * 0.05;
         camera.z = camera.z * 0.95 + -8.1 * 0.05;
 
-        // Pressure-based difficulty multiplier (as the shootout extends, pressure scales up speed!)
-        const pressureMultiplier = Math.min(2.5, 1.0 + (state.shotCount - 1) * 0.25);
+        // Pressure-based difficulty multiplier: rounds AND knockout stage speed up the sweeps
+        const pressureMultiplier = Math.min(2.8, 1.1 + (state.shotCount - 1) * 0.28 + state.stageIndex * 0.18);
 
         // Sweep variables update
         if (aimingStepRef.current === 0) {
@@ -748,7 +739,7 @@ export default function StadiumCanvas({
         camera.x = camera.x * 0.92 + 0 * 0.08;
         camera.y = camera.y * 0.94 + 1.35 * 0.06;
         camera.z = camera.z * 0.94 + -9.1 * 0.06;
-      } else if (state.gameState === 'BALL_FLIGHT' || state.gameState === 'CELEBRATION' || state.gameState === 'SAVED' || state.gameState === 'OUT_OF_BOUNDS') {
+      } else if (state.gameState === 'BALL_FLIGHT') {
         // Gentle forward nudge — kicker drops behind camera, focus shifts to goal & ball
         focalLength = focalLength * 0.92 + 385 * 0.08;
         const targetCamX = state.ball.x * 0.35;
@@ -758,6 +749,13 @@ export default function StadiumCanvas({
         camera.x = camera.x * 0.84 + targetCamX * 0.16;
         camera.y = camera.y * 0.84 + targetCamY * 0.16;
         camera.z = camera.z * 0.84 + targetCamZ * 0.16;
+      } else if (state.gameState === 'CELEBRATION' || state.gameState === 'SAVED' || state.gameState === 'OUT_OF_BOUNDS') {
+        // Shot resolved: settle into a calm wide frame. Chasing the rebounding ball
+        // here is what caused the jarring fast zoom on saves and misses.
+        focalLength = focalLength * 0.97 + 380 * 0.03;
+        camera.x = camera.x * 0.97;
+        camera.y = camera.y * 0.97 + 1.35 * 0.03;
+        camera.z = camera.z * 0.97 + -8.1 * 0.03;
       }
 
       // 1. RENDER BACKGROUND STADIUM STANDS & CROWD
@@ -1315,12 +1313,12 @@ export default function StadiumCanvas({
 
                // Additional pressure error from extreme corner aiming (closer to posts/top = higher risk of mistake)
                const distFromCenter = Math.sqrt(exactX * exactX + exactY * exactY);
-               if (distFromCenter > 3.0) {
-                 errorMagnitude += (distFromCenter - 3.0) * 0.06;
+               if (distFromCenter > 2.8) {
+                 errorMagnitude += (distFromCenter - 2.8) * 0.07;
                }
 
-               // Add psychological tension/pressure from shootout rounds ("cuanto mas lejos llegas mas dificil es")
-               const roundPressureFactor = Math.min(2.5, 1.0 + (state.shotCount - 1) * 0.15);
+               // Psychological tension: later rounds AND deeper knockout stages shake the boot more
+               const roundPressureFactor = Math.min(2.8, 1.0 + (state.shotCount - 1) * 0.18 + state.stageIndex * 0.12);
                errorMagnitude *= roundPressureFactor;
 
                // Random deviation vectors
@@ -1369,9 +1367,9 @@ export default function StadiumCanvas({
                // Strategic strategy decision: 'anticipate' (dive early) vs 'react' (wait for kick)
                let gkStrategy: 'anticipate' | 'react' | 'stay' = 'react';
                const stratRandom = Math.random() * 100;
-               if (stratRandom < 22) {
-                 gkStrategy = 'anticipate'; // dives before ball leaves foot
-               } else if (stratRandom < 92) {
+               if (stratRandom < 12) {
+                 gkStrategy = 'anticipate'; // dives before ball leaves foot (blind gamble)
+               } else if (stratRandom < 96) {
                  gkStrategy = 'react'; // waits for ball path, relies on pure reflexes
                } else {
                  gkStrategy = 'stay'; // covers central chip shots / panenkas
@@ -1390,7 +1388,8 @@ export default function StadiumCanvas({
                  state.keeper.diveDelay = 0; // starts immediately
                } else if (gkStrategy === 'react') {
                  // Reads the shot; chance of picking the right side scales with reflexes
-                 const diveCorrectChance = 0.4 + ((reflexes - 85) / 15) * 0.35;
+                 // and grows in deeper knockout rounds (better keepers, more focus)
+                 const diveCorrectChance = Math.min(0.92, 0.55 + ((reflexes - 85) / 15) * 0.30 + state.stageIndex * 0.06);
                  if (Math.random() < diveCorrectChance) {
                    keeperDiveDir = ballSector;
                    keeperHeightLoc = finalDestY > 1.45 ? 'high' : 'low'; // reads height too when it reads the side
@@ -1415,8 +1414,12 @@ export default function StadiumCanvas({
                state.keeper.targetX = gkDive.x;
                state.keeper.targetY = gkDive.y;
 
-               const predictedGloveRadius = 0.80 + ((reach - 85) / 14) * 0.22 + ((reflexes - 85) / 14) * 0.12;
-               state.keeper.willMiss = Math.hypot(finalDestX - gkDive.x, finalDestY - gkDive.y) > predictedGloveRadius + 0.10;
+               // (Stage difficulty lives in diveCorrectChance — the radius stays stat-only
+               // so a perfectly placed corner can still beat even a correct guess.)
+               let predictedGloveRadius = 0.84 + ((reach - 85) / 14) * 0.22 + ((reflexes - 85) / 14) * 0.12;
+               if (finalPower > 88) predictedGloveRadius -= 0.10; // power blasts are harder to hold
+               state.keeper.gloveRadius = predictedGloveRadius;
+               state.keeper.willMiss = Math.hypot(finalDestX - gkDive.x, finalDestY - gkDive.y) > predictedGloveRadius;
 
                // Dynamic trigger computation for realistic timing coherence with shot duration
                state.keeper.startDiveZ = -5.5 + state.keeper.diveDelay * velocityZ;
@@ -1453,9 +1456,11 @@ export default function StadiumCanvas({
                state.keeper.targetX = userDive.x;
                state.keeper.targetY = userDive.y;
 
-               let predictedGloveRadius = 0.80 + ((userGKStat.alcance - 85) / 14) * 0.22 + ((userGKStat.reflejos - 85) / 14) * 0.12;
+               // Tighter glove radius than the AI keeper — saving as the user should feel earned
+               let predictedGloveRadius = 0.72 + ((userGKStat.alcance - 85) / 14) * 0.20 + ((userGKStat.reflejos - 85) / 14) * 0.10;
                if (state.aiPower > 88) predictedGloveRadius -= 0.10;
-               state.keeper.willMiss = Math.hypot(finalDestX - userDive.x, finalDestY - userDive.y) > predictedGloveRadius + 0.10;
+               state.keeper.gloveRadius = predictedGloveRadius;
+               state.keeper.willMiss = Math.hypot(finalDestX - userDive.x, finalDestY - userDive.y) > predictedGloveRadius;
 
                state.keeper.diveDelay = Math.max(2, Math.min(6, flightTicks - 12));
                state.keeper.startDiveZ = -5.5 + state.keeper.diveDelay * velocityZ;
@@ -1873,19 +1878,18 @@ export default function StadiumCanvas({
         const leftGlovePos = drawArm(lHand);
         const rightGlovePos = drawArm(rHand);
 
-        // ---- Gloves ----
+        // ---- Gloves (each glove gets its own path: two arcs in one stroked path
+        // draw a connecting segment between the hands) ----
         const gloveR = szG * (dp > 0.02 ? 0.085 : 0.07);
-        ctx.fillStyle = '#fb923c'; // bright orange gloves
-        ctx.beginPath();
-        ctx.arc(leftGlovePos.x, leftGlovePos.y, gloveR, 0, Math.PI * 2);
-        ctx.arc(rightGlovePos.x, rightGlovePos.y, gloveR, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = '#c2410c';
-        ctx.lineWidth = szG * 0.012;
-        ctx.beginPath();
-        ctx.arc(leftGlovePos.x, leftGlovePos.y, gloveR, 0, Math.PI * 2);
-        ctx.arc(rightGlovePos.x, rightGlovePos.y, gloveR, 0, Math.PI * 2);
-        ctx.stroke();
+        for (const glovePos of [leftGlovePos, rightGlovePos]) {
+          ctx.fillStyle = '#fb923c'; // bright orange gloves
+          ctx.beginPath();
+          ctx.arc(glovePos.x, glovePos.y, gloveR, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = '#c2410c';
+          ctx.lineWidth = szG * 0.012;
+          ctx.stroke();
+        }
 
         // ---- Neck + Head ----
         ctx.strokeStyle = gkAppearance.skinTone;
@@ -1963,21 +1967,14 @@ export default function StadiumCanvas({
 
         // Check boundary & goal line events when passing Z = 0
         if (b.z >= 0 && state.gameState === 'BALL_FLIGHT') {
-          // Analyze goalie contact coordinates vs ball coordinates
-          // Analyze goalie contact coordinates vs ball coordinates Immersive Stats Check
-          const activeTeamGK = state.isOpponentTurn ? state.playerTeam : state.opponentTeam;
-          const gkStats = GOALKEEPER_REGISTRY[activeTeamGK.id] || { name: 'Portero', reflejos: 90, alcance: 90 };
-          
-          // Effective glove reach: how close the ball must pass to the keeper's hands
-          // (where it actually dove to) to be reachable. Scales with reach + reflexes.
-          let gloveRadius = 0.80 + ((gkStats.alcance - 85) / 14) * 0.22 + ((gkStats.reflejos - 85) / 14) * 0.12;
-          // Power blasts are harder to hold on to / react to
-          const shotPower = state.isOpponentTurn ? state.aiPower : state.power;
-          if (shotPower > 88) gloveRadius -= 0.10;
-          // Physical distance between the ball and the keeper's hands as it crosses the line.
-          // Because the keeper dove to a reach-limited spot (not onto the ball), a shot tucked
-          // into the corner naturally lands outside this radius => goal, even on a correct guess.
-          const distToGK = Math.hypot(b.x - gK.x, b.y - gK.y);
+          // Glove radius was committed at launch (keeper stats + shot power + stage).
+          const gloveRadius = gK.gloveRadius || 0.8;
+          // Distance from the ball to the keeper's GLOVES — i.e. the hand-reach spot the
+          // dive committed to (targetX/targetY), which is exactly where the gloves are
+          // drawn when the dive completes at the goal line. Measuring against the body
+          // center made visually-blocked balls slip in as "grazes"; this keeps what you
+          // SEE and what gets scored consistent: gloves on the ball => never a goal.
+          const distToGK = Math.hypot(b.x - gK.targetX, b.y - gK.targetY);
 
           // Post and top bar dimensions: Goals are widened [-4.5, 4.5], Y up to 2.8
           const isBetweenPosts = b.x >= -4.5 && b.x <= 4.5;
@@ -2065,11 +2062,11 @@ export default function StadiumCanvas({
               state.onShotComplete(result);
             }
           } 
-          else if (distToGK < gloveRadius + 0.45) {
+          else if (distToGK < gloveRadius + 0.38) {
             // "ROZAR Y DESVIAR" (Fingertip graze deflection!)
             // The closer the keeper's hand got, the more likely the touch keeps it out.
-            const closeness = Math.min(1, Math.max(0, (gloveRadius + 0.45 - distToGK) / 0.45));
-            const deflectsIn = Math.random() >= (0.35 + closeness * 0.45);
+            const closeness = Math.min(1, Math.max(0, (gloveRadius + 0.38 - distToGK) / 0.38));
+            const deflectsIn = Math.random() >= (0.40 + closeness * 0.50);
             state.screenShake = 3.0;
 
             if (deflectsIn) {
@@ -2086,6 +2083,8 @@ export default function StadiumCanvas({
               if (!state.shotLogged) {
                 state.shotLogged = true;
                 audioEngine.playNetSwish();
+                // A deflected goal is still a GOAL — full crowd + commentator celebration
+                audioEngine.playGoalCrowd();
                 state.netPoints.forEach(p => {
                   const dx = p.x - b.x;
                   const dy = p.y - b.y;
@@ -2595,8 +2594,9 @@ export default function StadiumCanvas({
         const heights: ShotHeight[] = ['low', 'high'];
 
         const aiSelectedDir = directions[Math.floor(Math.random() * 3)];
-        const aiSelectedHeight = heights[Math.random() < 0.65 ? 0 : 1];
-        
+        // Rivals go high more often — high corners are the hardest for the user keeper
+        const aiSelectedHeight = heights[Math.random() < 0.55 ? 0 : 1];
+
         // Opponent stats-based power and curve
         const oppPowerStat = opponentTeam.power;
         const aiSelectedPower = Math.round(oppPowerStat - 8 + Math.random() * 16);
@@ -2608,8 +2608,10 @@ export default function StadiumCanvas({
         state.aiPower = aiSelectedPower;
         state.aiCurve = aiSelectedCurve;
 
-        const exactX = aiSelectedDir === 'left' ? -2.6 : (aiSelectedDir === 'right' ? 2.6 : 0);
-        const exactY = aiSelectedHeight === 'high' ? 2.0 : 0.5;
+        // Rivals aim tighter to the posts than before (was ±2.6) — guessing the side
+        // is no longer enough on its own, the dive still has to cover the corner
+        const exactX = aiSelectedDir === 'left' ? -3.05 : (aiSelectedDir === 'right' ? 3.05 : 0);
+        const exactY = aiSelectedHeight === 'high' ? 2.1 : 0.45;
 
         const spinCurve = aiSelectedCurve * 0.1;
         const oppAccuracy = opponentTeam.accuracy;
@@ -2628,7 +2630,9 @@ export default function StadiumCanvas({
           edgeErrorFactor += (0.7 - edgeDistanceY) * 0.9;
         }
 
-        const errLimit = Math.max(0.04, (100 - oppAccuracy) * 0.012) * powerErrorFactor * edgeErrorFactor;
+        // Sharper rivals overall, and even sharper deeper in the bracket
+        const stageSharpness = Math.max(0.6, 1 - stageIndex * 0.1);
+        const errLimit = Math.max(0.04, (100 - oppAccuracy) * 0.009) * powerErrorFactor * edgeErrorFactor * stageSharpness;
         const randomAngleX = (Math.random() - 0.5) * errLimit * 2.8;
         const randomAngleY = (Math.random() - 0.5) * errLimit * 2.3;
 
@@ -2956,7 +2960,7 @@ export default function StadiumCanvas({
 
                   {/* Floating trophy with a sweeping shine */}
                   <div className="wc-float">
-                    <div className="wc-shine-wrap inline-block rounded-xl drop-shadow-[0_10px_34px_rgba(255,190,40,0.55)]">
+                    <div className="inline-block rounded-xl drop-shadow-[0_10px_34px_rgba(255,190,40,0.55)]">
                       <svg viewBox="0 0 120 150" className="w-32 h-40 md:w-40 md:h-52">
                         <defs>
                           <linearGradient id="wcGold" x1="0" y1="0" x2="1" y2="1">
