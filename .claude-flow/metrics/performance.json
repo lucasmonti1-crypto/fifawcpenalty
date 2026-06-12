@@ -1,0 +1,111 @@
+{
+  "timestamp": "2026-06-12T01:36:33.825Z",
+  "mode": "headless",
+  "workerType": "optimize",
+  "model": "sonnet",
+  "durationMs": 123631,
+  "executionId": "optimize_1781228070194_lz3epj",
+  "success": true,
+  "findings": {
+    "sections": [
+      {
+        "title": "Performance Analysis",
+        "content": "\n",
+        "level": 2
+      },
+      {
+        "title": "1. Unnecessary Re-renders",
+        "content": "\n**`GameUI.tsx:129` — `power` in keydown effect dependency array**\n\nThis is the most impactful issue. When the power bar is charging, `power` updates ~60× per second. Because `power` is a dependency, the effect tears down and re-registers the `window` keydown listener 60× per second:\n\n```tsx\n// Current — listener removed/re-added every animation frame tick\nuseEffect(() => {\n  const handleKeyDown = (e: KeyboardEvent) => {\n    ...\n    onShoot(selectedDir, selectedHeight, Math.round(power), curve); // reads power\n  };\n  window.addEventListener('keydown', handleKeyDown);\n  return () => window.removeEventListener('keydown', handleKeyDown);\n}, [gameState, isCharging, selectedDir, selectedHeight, power, curve, onShoot]); // power here!\n```\n\nFix: move `power` to a ref so the closure always reads the latest value without being a dep:\n\n```tsx\nconst powerRef = useRef(power);\nuseEffect(() => { powerRef.current = power; }, [power]);\n\nuseEffect(() => {\n  const handleKeyDown = (e: KeyboardEvent) => {\n    if (e.code === 'Space' && !isCharging) {\n      onShoot(selectedDir, selectedHeight, Math.round(powerRef.current), curve);\n    }\n  };\n  window.addEventListener('keydown', handleKeyDown);\n  return () => window.removeEventListener('keydown', handleKeyDown);\n}, [gameState, isCharging, selectedDir, selectedHeight, curve, onShoot]); // power removed\n```\n\n---\n\n**`App.tsx:347` — inline `onAnimationTriggered` recreated every render**\n\n```tsx\n// Every render creates a new function reference\n<StadiumCanvas onAnimationTriggered={() => {}} ... />\n```\n\nSince this is a no-op, just define it once:\n\n```tsx\n// App.tsx — outside component or as useCallback with []\nconst noop = useCallback(() => {}, []);\n<StadiumCanvas onAnimationTriggered={noop} ... />\n```\n\n---\n\n**`App.tsx:36` — `drawOpponent` recreated every render**\n\n`drawOpponent` closes over `playerTeam` and `facedIds` but is never memoized. Wrap it:\n\n```tsx\nconst drawOpponent = useCallback((): Team => {\n  const pool = TEAMS.filter(t => t.id !== playerTeam.id && !facedIds.includes(t.id));\n  const list = pool.length > 0 ? pool : TEAMS.filter(t => t.id !== playerTeam.id);\n  return list[Math.floor(Math.random() * list.length)];\n}, [playerTeam.id, facedIds]);\n```\n\n---\n\n**`TeamSelector.tsx` — no memoization on a 48-button grid rendered twice**\n\n`FlagBadge` renders 96 times on this screen (2 grids × 48 teams). It's a pure SVG lookup — a prime candidate for `React.memo`:\n\n```tsx\n// FlagBadge.tsx\nexport const FlagBadge = React.memo(function FlagBadge({ teamId, className }: FlagBadgeProps) {\n  ...\n});\n```\n\nThe individual grid buttons in `TeamSelector` also get recreated on every state change (every selection). The two `TEAMS.map` loops produce new inline `onClick` handlers on every render. Extracting them into a memoized sub-component would prevent unnecessary work:\n\n```tsx\nconst TeamButton = React.memo(({ team, idx, isSelected, onClick }: ...) => (\n  <button onClick={() => onClick(idx)} ...>\n    <FlagBadge teamId={team.id} ... />\n  </button>\n));\n```\n\n---\n\n",
+        "level": 3
+      },
+      {
+        "title": "2. Redundant Per-Frame Computations (Canvas render loop)",
+        "content": "\n**`StadiumCanvas.tsx:765` — gradient objects created every frame**\n\n```tsx\n// Called every frame (~60fps) — allocates a new gradient object each time\nconst skyGrad = ctx.createLinearGradient(0, 0, 0, dimensions.height * 0.4);\n```\n\nSame applies to the 4 stadium light beam gradients at line ~860. These gradients don't change between frames (only on resize). Cache them outside the render loop:\n\n```tsx\n// Inside the useEffect, before render(), create once:\nlet skyGrad = ctx.createLinearGradient(0, 0, 0, dimensions.height * 0.4);\nskyGrad.addColorStop(0, '#0f172a');\nskyGrad.addColorStop(1, '#1e293b');\n// reuse `skyGrad` inside render()\n```\n\n---\n\n**`StadiumCanvas.tsx:724-743` — `document.getElementById` queried every frame**\n\nDuring power-sweep phase (Step 2), the render loop calls `getElementById` twice per frame at 60fps:\n\n```tsx\n// Inside render(), called 60x/sec:\nconst fillEl = document.getElementById('power-bar-fill');\nconst textEl = document.getElementById('power-bar-text');\n```\n\nCache these outside the render function (query once after first paint):\n\n```tsx\n// Inside useEffect, before render():\nconst fillEl = document.getElementById('power-bar-fill') as HTMLElement | null;\nconst textEl = document.getElementById('power-bar-text') as HTMLElement | null;\n// render() uses fillEl/textEl from closure — no repeated lookups\n```\n\n---\n\n**`StadiumCanvas.tsx:806-824` — crowd loop runs O(width × height) per frame with `Math.sin`**\n\nThe crowd renders `(width/18) × (crowdHeight/12)` pixels each frame (~1800 iterations at 1920px width). Each iteration calls `Math.sin` for color variation and jumping. The color variant (`rSeed`) is purely deterministic by position `(i, j)` — it never changes. Pre-compute an array of `{color, skinTone}` tuples once on resize:\n\n```tsx\n// Compute once (outside render, updated on resize):\ntype CrowdDot = { x: number; y: number; color: string };\nconst crowdDots: CrowdDot[] = [];\nfor (let i = 0; i < width; i += 18) {\n  const rSeed = Math.sin(i * 100 + /* j * 50 - use base row */ 0);\n  const color = rSeed > 0.45 ? '#ef4444' : rSeed > 0.1 ? '#3b82f6' : ...;\n  crowdDots.push({ x: i, color });\n}\n// In render(): iterate crowdDots and only compute the per-frame `jump` sin\n```\n\n---\n\n",
+        "level": 3
+      },
+      {
+        "title": "3. Memory Leak Risk",
+        "content": "\n**`StadiumCanvas.tsx:586` — uncleaned `setTimeout` on resize**\n\n```tsx\nuseEffect(() => {\n  const handleResize = () => { ... setDimensions(...); };\n  window.addEventListener('resize', handleResize);\n  handleResize();\n  setTimeout(handleResize, 100); // ← no cleanup if component unmounts before 100ms\n  return () => window.removeEventListener('resize', handleResize);\n}, []);\n```\n\nFix:\n\n```tsx\nuseEffect(() => {\n  const handleResize = () => setDimensions({ width: window.innerWidth, height: window.innerHeight });\n  window.addEventListener('resize', handleResize);\n  handleResize();\n  const t = setTimeout(handleResize, 100);\n  return () => {\n    window.removeEventListener('resize', handleResize);\n    clearTimeout(t);\n  };\n}, []);\n```\n\n---\n\n**`StadiumCanvas.tsx` — `bgAudioRef` not paused on unmount**\n\nThe background defeat audio (`bgAudioRef`) is never paused in a cleanup. If `StadiumCanvas` unmounts mid-playback, audio continues indefinitely:\n\n```tsx\n// Add to the existing useEffect or a dedicated one:\nreturn () => {\n  if (bgAudioRef.current) bgAudioRef.current.pause();\n};\n```\n\n---\n\n",
+        "level": 3
+      },
+      {
+        "title": "4. Caching Opportunity",
+        "content": "\n**`StadiumCanvas.tsx:447` — `getCanvasPowerSpeed` recomputed in effect deps**\n\nThe function is recreated every render and called inside the animation loop. Since it's a simple linear formula from `shotCount`, inline it or read from `stateRef`:\n\n```tsx\n// In the animation frame (already reads from stateRef), just inline:\nconst speed = 2.4 + (state.shotCount - 1) * 0.7;\n```\n\n---\n\n",
+        "level": 3
+      },
+      {
+        "title": "Summary Table",
+        "content": "| Issue | File | Impact | Fix |\n|---|---|---|---|\n| `power` in keydown effect deps | `GameUI.tsx:129` | High — 60 listener re-registers/sec | Use a ref for `power` |\n| `getElementById` per frame | `StadiumCanvas.tsx:725-743` | Medium — 120 DOM queries/sec | Cache elements before `render()` |\n| Gradient objects per frame | `StadiumCanvas.tsx:765,860` | Medium — GC pressure at 60fps | Create once, reuse in loop |\n| Crowd `Math.sin` per dot | `StadiumCanvas.tsx:806-824` | Medium — ~1800 iterations/frame | Pre-compute static color data |\n| `FlagBadge` not memoized | `FlagBadge.tsx` | Medium — 96 re-renders on selection | `React.memo` |\n| `setTimeout` no cleanup | `StadiumCanvas.tsx:586` | Low — potential setState on unmount | `clearTimeout` in cleanup |\n| `bgAudioRef` not paused | `StadiumCanvas.tsx` | Low — audio leak on unmount | Pause in cleanup |\n| Inline `onAnimationTriggered` | `App.tsx:347` | Low — new ref each render | `useCallback` with `[]` |",
+        "level": 3
+      }
+    ],
+    "codeBlocks": [
+      {
+        "language": "tsx",
+        "code": "// Current — listener removed/re-added every animation frame tick\nuseEffect(() => {\n  const handleKeyDown = (e: KeyboardEvent) => {\n    ...\n    onShoot(selectedDir, selectedHeight, Math.round(power), curve); // reads power\n  };\n  window.addEventListener('keydown', handleKeyDown);\n  return () => window.removeEventListener('keydown', handleKeyDown);\n}, [gameState, isCharging, selectedDir, selectedHeight, power, curve, onShoot]); // power here!"
+      },
+      {
+        "language": "tsx",
+        "code": "const powerRef = useRef(power);\nuseEffect(() => { powerRef.current = power; }, [power]);\n\nuseEffect(() => {\n  const handleKeyDown = (e: KeyboardEvent) => {\n    if (e.code === 'Space' && !isCharging) {\n      onShoot(selectedDir, selectedHeight, Math.round(powerRef.current), curve);\n    }\n  };\n  window.addEventListener('keydown', handleKeyDown);\n  return () => window.removeEventListener('keydown', handleKeyDown);\n}, [gameState, isCharging, selectedDir, selectedHeight, curve, onShoot]); // power removed"
+      },
+      {
+        "language": "tsx",
+        "code": "// Every render creates a new function reference\n<StadiumCanvas onAnimationTriggered={() => {}} ... />"
+      },
+      {
+        "language": "tsx",
+        "code": "// App.tsx — outside component or as useCallback with []\nconst noop = useCallback(() => {}, []);\n<StadiumCanvas onAnimationTriggered={noop} ... />"
+      },
+      {
+        "language": "tsx",
+        "code": "const drawOpponent = useCallback((): Team => {\n  const pool = TEAMS.filter(t => t.id !== playerTeam.id && !facedIds.includes(t.id));\n  const list = pool.length > 0 ? pool : TEAMS.filter(t => t.id !== playerTeam.id);\n  return list[Math.floor(Math.random() * list.length)];\n}, [playerTeam.id, facedIds]);"
+      },
+      {
+        "language": "tsx",
+        "code": "// FlagBadge.tsx\nexport const FlagBadge = React.memo(function FlagBadge({ teamId, className }: FlagBadgeProps) {\n  ...\n});"
+      },
+      {
+        "language": "tsx",
+        "code": "const TeamButton = React.memo(({ team, idx, isSelected, onClick }: ...) => (\n  <button onClick={() => onClick(idx)} ...>\n    <FlagBadge teamId={team.id} ... />\n  </button>\n));"
+      },
+      {
+        "language": "tsx",
+        "code": "// Called every frame (~60fps) — allocates a new gradient object each time\nconst skyGrad = ctx.createLinearGradient(0, 0, 0, dimensions.height * 0.4);"
+      },
+      {
+        "language": "tsx",
+        "code": "// Inside the useEffect, before render(), create once:\nlet skyGrad = ctx.createLinearGradient(0, 0, 0, dimensions.height * 0.4);\nskyGrad.addColorStop(0, '#0f172a');\nskyGrad.addColorStop(1, '#1e293b');\n// reuse `skyGrad` inside render()"
+      },
+      {
+        "language": "tsx",
+        "code": "// Inside render(), called 60x/sec:\nconst fillEl = document.getElementById('power-bar-fill');\nconst textEl = document.getElementById('power-bar-text');"
+      },
+      {
+        "language": "tsx",
+        "code": "// Inside useEffect, before render():\nconst fillEl = document.getElementById('power-bar-fill') as HTMLElement | null;\nconst textEl = document.getElementById('power-bar-text') as HTMLElement | null;\n// render() uses fillEl/textEl from closure — no repeated lookups"
+      },
+      {
+        "language": "tsx",
+        "code": "// Compute once (outside render, updated on resize):\ntype CrowdDot = { x: number; y: number; color: string };\nconst crowdDots: CrowdDot[] = [];\nfor (let i = 0; i < width; i += 18) {\n  const rSeed = Math.sin(i * 100 + /* j * 50 - use base row */ 0);\n  const color = rSeed > 0.45 ? '#ef4444' : rSeed > 0.1 ? '#3b82f6' : ...;\n  crowdDots.push({ x: i, color });\n}\n// In render(): iterate crowdDots and only compute the per-frame `jump` sin"
+      },
+      {
+        "language": "tsx",
+        "code": "useEffect(() => {\n  const handleResize = () => { ... setDimensions(...); };\n  window.addEventListener('resize', handleResize);\n  handleResize();\n  setTimeout(handleResize, 100); // ← no cleanup if component unmounts before 100ms\n  return () => window.removeEventListener('resize', handleResize);\n}, []);"
+      },
+      {
+        "language": "tsx",
+        "code": "useEffect(() => {\n  const handleResize = () => setDimensions({ width: window.innerWidth, height: window.innerHeight });\n  window.addEventListener('resize', handleResize);\n  handleResize();\n  const t = setTimeout(handleResize, 100);\n  return () => {\n    window.removeEventListener('resize', handleResize);\n    clearTimeout(t);\n  };\n}, []);"
+      },
+      {
+        "language": "tsx",
+        "code": "// Add to the existing useEffect or a dedicated one:\nreturn () => {\n  if (bgAudioRef.current) bgAudioRef.current.pause();\n};"
+      },
+      {
+        "language": "tsx",
+        "code": "// In the animation frame (already reads from stateRef), just inline:\nconst speed = 2.4 + (state.shotCount - 1) * 0.7;"
+      }
+    ]
+  },
+  "rawOutputPreview": "Now I have a thorough picture of the codebase. Here's the analysis:\n\n---\n\n## Performance Analysis\n\n### 1. Unnecessary Re-renders\n\n**`GameUI.tsx:129` — `power` in keydown effect dependency array**\n\nThis is the most impactful issue. When the power bar is charging, `power` updates ~60× per second. Because `power` is a dependency, the effect tears down and re-registers the `window` keydown listener 60× per second:\n\n```tsx\n// Current — listener removed/re-added every animation frame tick\nuseEffect(() => {\n  const handleKeyDown = (e: KeyboardEvent) => {\n    ...\n    onShoot(selectedDir, selectedHeight, Math.round(power), curve); // reads power\n  };\n  window.addEventListener('keydown', handleKeyDown);\n  return () => window.removeEventListener('keydown', handleKeyDown);\n}, [gameState, isCharging, selectedDir, selectedHeight, power, curve, onShoot]); // power here!\n```\n\nFix: move `power` to a ref so the closure always reads the latest value without being a dep:\n\n```tsx\nconst powerRef = useRef(power);\nuseEffect(() => { powerRef.current = power; }, [power]);\n\nuseEffect(() => {\n  const handleKeyDown = (e: KeyboardEvent) => {\n    if (e.code === 'Space' && !isCharging) {\n      onShoot(selectedDir, selectedHeight, Math.round(powerRef.current), curve);\n    }\n  };\n  window.addEventListener('keydown', handleKeyDown);\n  return () => window.removeEventListener('keydown', handleKeyDown);\n}, [gameState, isCharging, selectedDir, selectedHeight, curve, onShoot]); // power removed\n```\n\n---\n\n**`App.tsx:347` — inline `onAnimationTriggered` recreated every render**\n\n```tsx\n// Every render creates a new function reference\n<StadiumCanvas onAnimationTriggered={() => {}} ... />\n```\n\nSince this is a no-op, just define it once:\n\n```tsx\n// App.tsx — outside component or as useCallback with []\nconst noop = useCallback(() => {}, []);\n<StadiumCanvas onAnimationTriggered={noop} ... />\n```\n\n---\n\n**`App.tsx:36` — `drawOpponent` recreated every render**\n\n`drawOpponent` closes over `playerTeam` and `facedIds`",
+  "rawOutputLength": 7948
+}

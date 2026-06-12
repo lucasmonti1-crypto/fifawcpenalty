@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-06-12T01:45:30.189Z",
+  "projectRoot": "/Users/lucasmonti/Desktop/world-cup-2026-penalty-shootout",
+  "structure": {
+    "hasPackageJson": true,
+    "hasTsConfig": true,
+    "hasClaudeConfig": true,
+    "hasClaudeFlow": true
+  },
+  "scannedAt": 1781228730189
+}
